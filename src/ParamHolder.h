@@ -29,6 +29,7 @@
 #define _QORE_MODULE_ODBC_PARAMHOLDER_H
 
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 #include <sql.h>
@@ -135,7 +136,7 @@ public:
     DLLLOCAL void clear() {
         unsigned int count = strings.size();
         for (unsigned int i = 0; i < count; i++)
-            delete [] (strings[i]);
+            free(strings[i]);
 
         strings.clear();
         ints8.clear();

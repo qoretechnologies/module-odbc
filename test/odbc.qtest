@@ -388,6 +388,9 @@ class OdbcTest inherits QUnit::Test {
         addTestCase("Types test", \typesTest());
         addTestCase("Timezone test", \timezoneTest());
         addTestCase("Array bind test", \arrayBindTest());
+        addTestCase("Connection info test", \connectionInfoTest());
+        addTestCase("Options test", \optionsTest());
+        addTestCase("Statement operations test", \statementOpsTest());
         set_return_value(main());
     }
 
@@ -898,4 +901,292 @@ class OdbcTest inherits QUnit::Test {
             assertEq(row, stmt.getValue());
         }
     }
+
+    connectionInfoTest() {
+        if (no_odbc) {
+            testSkip("no ODBC driver present");
+        }
+
+        # Test getClientVersion returns a valid version number
+        int clientVer = ds.getClientVersion();
+        assertTrue(clientVer > 0, "client version should be positive");
+
+        # Test getServerVersion returns a valid version (int or hash depending on driver)
+        auto serverVer = ds.getServerVersion();
+        assertTrue(exists serverVer, "server version should exist");
+
+        # Test getDriverRealName returns a non-empty string
+        *string driverName = ds.getDriverRealName();
+        assertTrue(exists driverName && driverName.length() > 0, "driver real name should not be empty");
+
+        if (m_options.verbose > 2) {
+            printf("Client version: %d (%s)\n", clientVer, getVersionString(clientVer));
+            printf("Server version: %y\n", serverVer);
+            printf("Driver real name: %s\n", driverName);
+        }
+    }
+
+    optionsTest() {
+        if (no_odbc) {
+            testSkip("no ODBC driver present");
+        }
+
+        # Test numeric number options
+        {
+            Datasource optDs(connStr);
+            optDs.open();
+            on_exit optDs.close();
+
+            # Test optimal-numbers (default)
+            assertTrue(optDs.getOption("optimal-numbers"), "optimal-numbers should be True by default");
+            assertFalse(optDs.getOption("string-numbers"), "string-numbers should be False by default");
+            assertFalse(optDs.getOption("numeric-numbers"), "numeric-numbers should be False by default");
+
+            # Set string-numbers
+            optDs.setOption("string-numbers", True);
+            assertFalse(optDs.getOption("optimal-numbers"), "optimal-numbers should be False after setting string-numbers");
+            assertTrue(optDs.getOption("string-numbers"), "string-numbers should be True after setting it");
+            assertFalse(optDs.getOption("numeric-numbers"), "numeric-numbers should be False after setting string-numbers");
+
+            # Set numeric-numbers
+            optDs.setOption("numeric-numbers", True);
+            assertFalse(optDs.getOption("optimal-numbers"), "optimal-numbers should be False after setting numeric-numbers");
+            assertFalse(optDs.getOption("string-numbers"), "string-numbers should be False after setting numeric-numbers");
+            assertTrue(optDs.getOption("numeric-numbers"), "numeric-numbers should be True after setting it");
+
+            # Set optimal-numbers
+            optDs.setOption("optimal-numbers", True);
+            assertTrue(optDs.getOption("optimal-numbers"), "optimal-numbers should be True after setting it");
+            assertFalse(optDs.getOption("string-numbers"), "string-numbers should be False after setting optimal-numbers");
+            assertFalse(optDs.getOption("numeric-numbers"), "numeric-numbers should be False after setting optimal-numbers");
+        }
+
+        # Test bigint options
+        {
+            Datasource optDs(connStr);
+            optDs.open();
+            on_exit optDs.close();
+
+            # Test bigint-native (default)
+            assertTrue(optDs.getOption("bigint-native"), "bigint-native should be True by default");
+            assertFalse(optDs.getOption("bigint-string"), "bigint-string should be False by default");
+
+            # Set bigint-string
+            optDs.setOption("bigint-string", True);
+            assertFalse(optDs.getOption("bigint-native"), "bigint-native should be False after setting bigint-string");
+            assertTrue(optDs.getOption("bigint-string"), "bigint-string should be True after setting it");
+
+            # Set bigint-native
+            optDs.setOption("bigint-native", True);
+            assertTrue(optDs.getOption("bigint-native"), "bigint-native should be True after setting it");
+            assertFalse(optDs.getOption("bigint-string"), "bigint-string should be False after setting bigint-native");
+        }
+
+        # Test fractional-precision option
+        {
+            Datasource optDs(connStr);
+            optDs.open();
+            on_exit optDs.close();
+
+            # Default should be reasonable (typically 3 or 6)
+            int frPrec = optDs.getOption("fractional-precision");
+            assertTrue(frPrec >= 1 && frPrec <= 9, "fractional-precision should be between 1 and 9");
+
+            # Set fractional-precision to different values
+            optDs.setOption("fractional-precision", 9);
+            assertEq(9, optDs.getOption("fractional-precision"), "fractional-precision should be 9 after setting it");
+
+            optDs.setOption("fractional-precision", 1);
+            assertEq(1, optDs.getOption("fractional-precision"), "fractional-precision should be 1 after setting it");
+
+            # Test invalid values raise exceptions
+            assertThrows("ODBC-OPTION-ERROR", sub() { optDs.setOption("fractional-precision", 0); });
+            assertThrows("ODBC-OPTION-ERROR", sub() { optDs.setOption("fractional-precision", 10); });
+        }
+
+        # Test timeout options
+        {
+            Datasource optDs(connStr);
+            optDs.open();
+            on_exit optDs.close();
+
+            # Test login-timeout
+            int loginTimeout = optDs.getOption("login-timeout");
+            assertTrue(loginTimeout >= 0, "login-timeout should be >= 0");
+
+            # Test connection-timeout
+            int connTimeout = optDs.getOption("connection-timeout");
+            assertTrue(connTimeout >= 0, "connection-timeout should be >= 0");
+
+            # Verify getOption returns correct values (this tests the bug fix for swapped values)
+            optDs.setOption("login-timeout", 30);
+            optDs.setOption("connection-timeout", 60);
+            assertEq(30, optDs.getOption("login-timeout"), "login-timeout should return 30");
+            assertEq(60, optDs.getOption("connection-timeout"), "connection-timeout should return 60");
+
+            # Test with different values to confirm no swapping
+            optDs.setOption("login-timeout", 100);
+            optDs.setOption("connection-timeout", 200);
+            assertEq(100, optDs.getOption("login-timeout"), "login-timeout should return 100");
+            assertEq(200, optDs.getOption("connection-timeout"), "connection-timeout should return 200");
+
+            # Test invalid timeout values
+            assertThrows("ODBC-OPTION-ERROR", sub() { optDs.setOption("login-timeout", "abc"); });
+            assertThrows("ODBC-OPTION-ERROR", sub() { optDs.setOption("connection-timeout", "xyz"); });
+        }
+
+        # Test qore-timezone option
+        {
+            Datasource optDs(connStr);
+            optDs.setOption("qore-timezone", "UTC");
+            optDs.open();
+            on_exit optDs.close();
+
+            string tz = optDs.getOption("qore-timezone");
+            assertTrue(exists tz && tz.length() > 0, "qore-timezone should return a timezone string");
+        }
+
+        # Test preserve-case option
+        {
+            Datasource optDs(connStr);
+            optDs.open();
+            on_exit optDs.close();
+
+            # Set preserve-case to True
+            optDs.setOption("preserve-case", True);
+            # Note: We can't easily test the effect without creating tables, but we can verify the option is accepted
+        }
+
+        if (m_options.verbose > 2) {
+            printf("Options test completed successfully\n");
+        }
+    }
+
+    statementOpsTest() {
+        if (no_odbc) {
+            testSkip("no ODBC driver present");
+        }
+
+        try {
+            ds.exec("DROP TABLE " + tableName);
+        } catch (hash<ExceptionInfo> ex) {
+            if (ex.err != "ODBC-EXEC-ERROR")
+                rethrow;
+        }
+        ds.commit();
+
+        # Create test table
+        auto ret = ds.exec("CREATE TABLE " + tableName + " (id int PRIMARY KEY, name varchar(64), value decimal(10,2))");
+        assertTrue(ret == 0 || ret == -1 || ret.typeCode() == NOTHING);
+        ds.commit();
+
+        on_exit {
+            try {
+                ds.exec("DROP TABLE " + tableName);
+                ds.commit();
+            } catch (hash<ExceptionInfo> ex) {}
+        }
+
+        # Insert test data
+        ds.exec("INSERT INTO " + tableName + " (id, name, value) VALUES (%v, %v, %v)", 1, "Alice", 100.50n);
+        ds.exec("INSERT INTO " + tableName + " (id, name, value) VALUES (%v, %v, %v)", 2, "Bob", 200.75n);
+        ds.exec("INSERT INTO " + tableName + " (id, name, value) VALUES (%v, %v, %v)", 3, "Charlie", 300.25n);
+        ds.commit();
+
+        # Test SQLStatement fetchRow
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("SELECT * FROM " + tableName + " WHERE id = %v");
+            stmt.bindArgs((1,));
+            stmt.exec();
+            on_exit stmt.close();
+
+            assertTrue(stmt.next(), "next() should return True for first row");
+            hash<auto> row = stmt.getValue();
+            assertEq(1, row.id ?? row.ID, "id should be 1");
+            assertEq("Alice", trim(row.name ?? row.NAME), "name should be Alice");
+        }
+
+        # Test SQLStatement fetchRows with limit
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("SELECT * FROM " + tableName + " ORDER BY id");
+            stmt.exec();
+            on_exit stmt.close();
+
+            # Fetch first 2 rows
+            list<auto> rows = stmt.fetchRows(2);
+            assertEq(2, rows.size(), "should fetch exactly 2 rows");
+        }
+
+        # Test SQLStatement fetchColumns
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("SELECT * FROM " + tableName + " ORDER BY id");
+            stmt.exec();
+            on_exit stmt.close();
+
+            hash<auto> cols = stmt.fetchColumns(-1);
+            assertTrue(cols.hasKey("id") || cols.hasKey("ID"), "result should have id column");
+            assertTrue(cols.hasKey("name") || cols.hasKey("NAME"), "result should have name column");
+            auto idCol = cols.id ?? cols.ID;
+            assertEq(3, idCol.size(), "id column should have 3 values");
+        }
+
+        # Test SQLStatement describe
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("SELECT * FROM " + tableName);
+            stmt.exec();
+            on_exit stmt.close();
+
+            hash<auto> desc = stmt.describe();
+            assertTrue(desc.size() > 0, "describe should return column information");
+
+            if (m_options.verbose > 2) {
+                printf("Statement describe: %N\n", desc);
+            }
+        }
+
+        # Test affectedRows
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("UPDATE " + tableName + " SET value = %v WHERE id = %v");
+            stmt.bindArgs((150.00n, 1));
+            stmt.exec();
+            on_exit stmt.rollback();
+
+            int affected = stmt.affectedRows();
+            assertEq(1, affected, "affectedRows should be 1");
+        }
+
+        # Test selectRow returns single row
+        {
+            hash<auto> row = ds.selectRow("SELECT * FROM " + tableName + " WHERE id = %v", 1);
+            assertTrue(exists row, "selectRow should return a row");
+            assertEq(1, row.id ?? row.ID, "id should be 1");
+        }
+
+        # Test selectRow with multiple rows should throw
+        {
+            assertThrows("ODBC-SELECT-ROW-ERROR", sub() {
+                ds.selectRow("SELECT * FROM " + tableName);
+            });
+        }
+
+        # Test bindPlaceholders throws expected error
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("SELECT * FROM " + tableName + " WHERE id = %v");
+            assertThrows("ODBC-BIND-PLACEHHODERS-ERROR", sub() {
+                stmt.bindPlaceholders(Type::Int);
+            });
+            stmt.close();
+        }
+
+        if (m_options.verbose > 2) {
+            printf("Statement operations test completed successfully\n");
+        }
+    }
+
 }

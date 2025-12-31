@@ -29,6 +29,7 @@
 #define _QORE_MODULE_ODBC_PARAMARRAYHOLDER_H
 
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 #include <sql.h>
@@ -213,7 +214,7 @@ public:
         unsigned int count = chars.size();
         for (unsigned int i = 0; i < count; i++) {
             for (size_t j = 0; j < arraySize; j++)
-                delete [] (chars[i][j]);
+                free(chars[i][j]);
             delete [] (chars[i]);
         }
 

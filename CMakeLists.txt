@@ -58,7 +58,7 @@ if (WIN32 AND MINGW AND MSYS)
     target_compile_definitions(${module_name} PUBLIC BUILDING_DLL)
 endif (WIN32 AND MINGW AND MSYS)
 
-target_include_directories(${module_name} PUBLIC ${ODBC_INCLUDE_DIR})
+target_include_directories(${module_name} PUBLIC ${ODBC_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(${module_name} ${ODBC_LIBRARIES})
 
 if (DEFINED ENV{DOXYGEN_EXECUTABLE})

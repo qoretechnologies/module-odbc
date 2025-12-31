@@ -7,7 +7,7 @@ ENV_FILE=/tmp/env.sh
 
 . ${ENV_FILE}
 
-apt update && apt install odbc-postgresql -y
+apt update && apt install odbc-postgresql valgrind -y
 
 . test/docker_test/postgres_lib.sh
 setup_postgres_on_host
@@ -54,6 +54,20 @@ for test in test/*.qtest; do
     gosu qore:qore qore $test -vv
     RESULTS="$RESULTS $?"
 done
+
+# run valgrind memory check
+echo && echo "-- running valgrind memory check --"
+VALGRIND_LOG=${MODULE_SRC_DIR}/valgrind.log
+for test in test/*.qtest; do
+    gosu qore:qore valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
+        --log-file=${VALGRIND_LOG} qore $test -v
+    # Check for memory leaks (look for "definitely lost" or "indirectly lost")
+    if grep -E "definitely lost: [1-9]|indirectly lost: [1-9]" ${VALGRIND_LOG}; then
+        echo "WARNING: Memory leaks detected in $test"
+        cat ${VALGRIND_LOG}
+    fi
+done
+echo "Valgrind check completed. Full log at ${VALGRIND_LOG}"
 
 cleanup_postgres_on_host
 
