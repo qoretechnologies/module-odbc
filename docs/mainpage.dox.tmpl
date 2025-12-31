@@ -10,12 +10,14 @@
       - @ref odbc_frprec_option
       - @ref odbc_timeout_options
     - @ref odbctrans
+    - @ref odbcexceptions
     - @ref odbcbind
       - @ref odbc_timezone
       - @ref odbc_encoding_support
       - @ref odbc_oracle_support
       - @ref odbc_binding_by_value
       - @ref odbc_to_qore
+    - @ref odbcschema
     - @ref odbcstoredprocs
     - @ref odbcreleasenotes
 
@@ -160,6 +162,73 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     An exception in a Datasource::exec() method as the first statement of a transaction will cause an automatic implicit \c "rollback" to be executed to maintain compatibility with other Qore DBI drivers.
 
+    @section odbcexceptions Exception Types and Error Handling
+
+    The ODBC driver raises various exceptions to indicate error conditions. Understanding these exceptions helps in writing robust error handling code.
+
+    @subsection odbc_connection_errors Connection Errors
+
+    |!Exception|!Description|!Common Causes|!Resolution
+    |\c ODBC-CONNECTION-ERROR|Connection to the database failed|Invalid credentials, server unavailable, network issues, incorrect connection string|Verify connection string, credentials, network connectivity, and that the database server is running
+    |\c ODBC-CONNECTION-HANDLE-ERROR|Cannot allocate a connection handle|Resource exhaustion, ODBC driver issues|Check ODBC driver configuration, restart application
+    |\c ODBC-CONNECTION-DEAD-ERROR|The database connection has been lost|Network failure, server restart, idle timeout|Reconnect to the database; consider using connection pooling with health checks
+    |\c ODBC-ENV-HANDLE-ERROR|Cannot allocate an environment handle|ODBC driver not installed or misconfigured|Install/reinstall the ODBC driver, check odbcinst.ini configuration
+    |\c ODBC-NO-CONNECTION-ERROR|Operation attempted without an open connection|Calling database methods before connecting or after disconnection|Ensure connection is established before executing operations
+
+    @subsection odbc_statement_errors Statement Errors
+
+    |!Exception|!Description|!Common Causes|!Resolution
+    |\c ODBC-EXEC-ERROR|SQL statement execution failed|SQL syntax error, constraint violation, permission denied|Check SQL syntax, verify table/column names, check database permissions
+    |\c ODBC-PREPARE-ERROR|Failed to prepare SQL statement|Invalid SQL syntax, referenced objects don't exist|Validate SQL syntax, ensure all referenced tables and columns exist
+    |\c ODBC-PARSE-ERROR|Invalid SQL specification|Malformed SQL, invalid placeholder syntax|Check SQL syntax and placeholder formatting
+    |\c ODBC-STATEMENT-ALLOC-ERROR|Cannot allocate a statement handle|Resource exhaustion, too many open statements|Close unused statements, check for statement handle leaks
+    |\c ODBC-FETCH-ERROR|Error fetching data from result set|Connection lost during fetch, data conversion error|Check connection stability, verify data type compatibility
+    |\c ODBC-SELECT-ROW-ERROR|selectRow() returned more than one row|Query returned multiple rows when only one was expected|Add LIMIT 1 to query or refine WHERE clause to ensure single row result
+
+    @subsection odbc_binding_errors Binding Errors
+
+    |!Exception|!Description|!Common Causes|!Resolution
+    |\c ODBC-BIND-ERROR|Invalid parameter binding|Invalid type constant passed to odbc_bind(), type mismatch|Use valid ODBCT_* constants, ensure parameter types match column types
+    |\c ODBC-BIND-PLACEHOLDERS-ERROR|Placeholder binding not supported|Calling bindPlaceholders() which is not supported by ODBC driver|Use bindArgs() or bind() instead of bindPlaceholders()
+
+    @subsection odbc_transaction_errors Transaction Errors
+
+    |!Exception|!Description|!Common Causes|!Resolution
+    |\c ODBC-COMMIT-ERROR|Transaction commit failed|Connection lost, database constraint violation during commit|Check connection, verify all data meets constraints, retry transaction
+    |\c ODBC-ROLLBACK-ERROR|Transaction rollback failed|Connection lost during rollback|Reconnect to database; the transaction should be automatically rolled back by the server
+    |\c ODBC-TRANSACTION-ERROR|Connection lost during active transaction|Network failure, server restart|Reconnect and retry the transaction
+
+    @subsection odbc_option_errors Option Errors
+
+    |!Exception|!Description|!Common Causes|!Resolution
+    |\c ODBC-OPTION-ERROR|Invalid option value|Wrong data type for option, value out of range|Check option documentation for valid types and ranges
+
+    @subsection odbc_error_handling_example Error Handling Example
+
+    @code
+    try {
+        Datasource ds("odbc:user/pass@dsn");
+
+        try {
+            ds.exec("INSERT INTO users (id, name) VALUES (%v, %v)", 1, "Test");
+            ds.commit();
+        } catch (hash<ExceptionInfo> ex) {
+            # Handle execution errors
+            if (ex.err == "ODBC-EXEC-ERROR") {
+                printf("SQL execution failed: %s\n", ex.desc);
+            }
+            ds.rollback();
+        }
+    } catch (hash<ExceptionInfo> ex) {
+        # Handle connection errors
+        if (ex.err == "ODBC-CONNECTION-ERROR") {
+            printf("Could not connect to database: %s\n", ex.desc);
+        } else if (ex.err == "ODBC-ENV-HANDLE-ERROR") {
+            printf("ODBC driver issue: %s\n", ex.desc);
+        }
+    }
+    @endcode
+
     @section odbcbind Binding and Types
 
     Apart from simply passing values for binding you can also use the \ref odbc_bind() function to specify the type to bind. See \ref odbc_binding_by_value for more information about how types are bound when binding by value with this driver.
@@ -264,6 +333,86 @@ major_version * 1000000 + minor_version * 10000 + sub_version
     |\c SQL_INTERVAL_MINUTE_TO_SECOND|\c date(relative)|direct conversion
     |\c SQL_GUID|\c string|format: <tt>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</tt> (canonical UUID form)
 
+    @section odbcschema Schema Introspection Functions
+
+    The ODBC module provides functions for querying database schema metadata using ODBC catalog functions.
+
+    @subsection odbc_schema_tables odbc_get_tables()
+
+    Returns a list of tables in the database.
+
+    @code
+    list<hash<auto>> tables = odbc_get_tables(ds);
+    # With optional filters:
+    list<hash<auto>> tables = odbc_get_tables(ds, catalog, schema, table_pattern, type);
+    @endcode
+
+    Each hash in the returned list contains: \c catalog, \c schema, \c name, \c type, \c remarks.
+
+    @subsection odbc_schema_columns odbc_get_columns()
+
+    Returns column metadata for a table.
+
+    @code
+    list<hash<auto>> columns = odbc_get_columns(ds, "users");
+    # With optional filters:
+    list<hash<auto>> columns = odbc_get_columns(ds, "users", catalog, schema, column_pattern);
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c table, \c name, \c type, \c type_name, \c size, \c decimal_digits, \c nullable, \c remarks, \c default, \c ordinal_position.
+
+    @subsection odbc_schema_primary_keys odbc_get_primary_keys()
+
+    Returns primary key information for a table.
+
+    @code
+    list<hash<auto>> pk = odbc_get_primary_keys(ds, "users");
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c table, \c column, \c key_seq, \c pk_name.
+
+    @subsection odbc_schema_foreign_keys odbc_get_foreign_keys()
+
+    Returns foreign key relationships for a table.
+
+    @code
+    list<hash<auto>> fks = odbc_get_foreign_keys(ds, "orders");
+    @endcode
+
+    Each hash contains: \c pk_catalog, \c pk_schema, \c pk_table, \c pk_column, \c fk_catalog, \c fk_schema, \c fk_table, \c fk_column, \c key_seq, \c update_rule, \c delete_rule, \c fk_name, \c pk_name.
+
+    @subsection odbc_schema_indexes odbc_get_indexes()
+
+    Returns index information for a table.
+
+    @code
+    list<hash<auto>> indexes = odbc_get_indexes(ds, "users");
+    # Get only unique indexes:
+    list<hash<auto>> unique_indexes = odbc_get_indexes(ds, "users", True);
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c table, \c non_unique, \c index_name, \c type, \c ordinal_position, \c column, \c asc_or_desc, \c cardinality, \c pages.
+
+    @subsection odbc_schema_procedures odbc_get_procedures()
+
+    Returns stored procedures in the database.
+
+    @code
+    list<hash<auto>> procs = odbc_get_procedures(ds);
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c name, \c num_input_params, \c num_output_params, \c num_result_sets, \c remarks, \c type.
+
+    @subsection odbc_schema_type_info odbc_get_type_info()
+
+    Returns supported SQL data types.
+
+    @code
+    list<hash<auto>> types = odbc_get_type_info(ds);
+    @endcode
+
+    Each hash contains information about supported data types including \c type_name and \c data_type.
+
     @section odbcstoredprocs Stored Procedures
 
     Stored procedure execution is supported; the following is an example of a stored procedure call:
@@ -294,6 +443,13 @@ hash: (1 member)
     @subsection odbcv1_2_0 odbc Driver Version 1.2.0
     - added support for returning the ODBC driver name in \c Datasource::getDriverRealName()
       (<a href="https://github.com/qorelanguage/qore/issues/4690">issue 4690</a>)
+    - added schema introspection functions: \c odbc_get_tables(), \c odbc_get_columns(),
+      \c odbc_get_primary_keys(), \c odbc_get_foreign_keys(), \c odbc_get_indexes(),
+      \c odbc_get_procedures(), \c odbc_get_type_info()
+    - fixed bug where \c getOption() returned swapped values for \c login-timeout and \c connection-timeout
+    - fixed wrong error message when setting invalid \c connection-timeout option
+    - fixed missing return statements after validation errors in \c setOption()
+    - fixed \c assert() instead of proper null check in \c odbc_get_driver_real_name()
 
     @subsection odbcv1_1_3 odbc Driver Version 1.1.3
     - fixed handling retrieving 0-length \c VARCHAR values
