@@ -1178,7 +1178,7 @@ class OdbcTest inherits QUnit::Test {
         {
             SQLStatement stmt = ds.getSQLStatement();
             stmt.prepare("SELECT * FROM " + tableName + " WHERE id = %v");
-            assertThrows("ODBC-BIND-PLACEHHODERS-ERROR", sub() {
+            assertThrows("ODBC-BIND-PLACEHOLDERS-ERROR", sub() {
                 stmt.bindPlaceholders(Type::Int);
             });
             stmt.close();
