@@ -7,7 +7,15 @@ ENV_FILE=/tmp/env.sh
 
 . ${ENV_FILE}
 
-apk add postgresql-client
+apk add postgresql-client psqlodbc
+
+# Register PostgreSQL Unicode ODBC driver
+cat > /tmp/psqlodbc.ini << 'DRIVER_EOF'
+[PostgreSQL Unicode]
+Description = PostgreSQL ODBC driver (Unicode version)
+Driver = /usr/lib/psqlodbcw.so
+DRIVER_EOF
+odbcinst -i -d -f /tmp/psqlodbc.ini
 
 # Check if we're running with postgres service in CI (k8s)
 if getent hosts postgres > /dev/null 2>&1; then
