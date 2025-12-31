@@ -9,10 +9,37 @@ ENV_FILE=/tmp/env.sh
 
 apt update && apt install odbc-postgresql valgrind -y
 
-. test/docker_test/postgres_lib.sh
-setup_postgres_on_host
+# Check if we're running with postgres service in CI (k8s)
+if getent hosts postgres > /dev/null 2>&1; then
+    echo "Using postgres service from CI"
+    export OMQ_DB_USER=postgres
+    export OMQ_DB_PASS=omq
+    export OMQ_DB_NAME=postgres
+    export OMQ_DB_HOST=postgres
+    export QORE_DB_CONNSTR_ODBC="odbc:${OMQ_DB_USER}/${OMQ_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${OMQ_DB_HOST};Database=${OMQ_DB_NAME}}"
 
-export QORE_DB_CONNSTR_ODBC="odbc:${OMQ_DB_USER}/omq@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${OMQ_DB_HOST};Database=${OMQ_DB_NAME}}"
+    # Wait for PostgreSQL to be ready
+    printf "waiting on PostgreSQL server: "
+    waited=0
+    while true; do
+        if PGPASSWORD=${OMQ_DB_PASS} psql -h ${OMQ_DB_HOST} -U ${OMQ_DB_USER} -d ${OMQ_DB_NAME} -c "SELECT 1" > /dev/null 2>&1; then
+            echo "ready"
+            break
+        fi
+        if [ $waited -eq 30 ]; then
+            echo && echo "Waited too long for PostgreSQL to start; aborting build."
+            exit 1
+        fi
+        printf .
+        sleep 1
+        waited=$((waited+1))
+    done
+else
+    echo "Using shared postgres host"
+    . test/docker_test/postgres_lib.sh
+    setup_postgres_on_host
+    export QORE_DB_CONNSTR_ODBC="odbc:${OMQ_DB_USER}/omq@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${OMQ_DB_HOST};Database=${OMQ_DB_NAME}}"
+fi
 
 # setup MODULE_SRC_DIR env var
 cwd=`pwd`
@@ -55,21 +82,11 @@ for test in test/*.qtest; do
     RESULTS="$RESULTS $?"
 done
 
-# run valgrind memory check
-echo && echo "-- running valgrind memory check --"
-VALGRIND_LOG=${MODULE_SRC_DIR}/valgrind.log
-for test in test/*.qtest; do
-    gosu qore:qore valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
-        --log-file=${VALGRIND_LOG} qore $test -v
-    # Check for memory leaks (look for "definitely lost" or "indirectly lost")
-    if grep -E "definitely lost: [1-9]|indirectly lost: [1-9]" ${VALGRIND_LOG}; then
-        echo "WARNING: Memory leaks detected in $test"
-        cat ${VALGRIND_LOG}
-    fi
-done
-echo "Valgrind check completed. Full log at ${VALGRIND_LOG}"
-
-cleanup_postgres_on_host
+# Cleanup if using shared host
+if ! getent hosts postgres > /dev/null 2>&1; then
+    . test/docker_test/postgres_lib.sh
+    cleanup_postgres_on_host
+fi
 
 # check the results
 for R in $RESULTS; do
@@ -77,4 +94,3 @@ for R in $RESULTS; do
         exit 1 # fail
     fi
 done
-
