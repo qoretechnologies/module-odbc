@@ -32,6 +32,8 @@
 
 #include <qore/Qore.h>
 
+#include "ODBCConnection.h"
+
 /** @defgroup odbc_bind_constants Type Constants for odbc_bind()
  */
 ///@{

@@ -331,10 +331,10 @@ QoreValue ODBCConnection::getOption(const char* opt) {
     }
 
     if (!strcasecmp(opt, OPT_LOGIN_TIMEOUT))
-        return static_cast<int64>(options.connTimeout);
+        return static_cast<int64>(options.loginTimeout);
 
     if (!strcasecmp(opt, OPT_CONN_TIMEOUT))
-        return static_cast<int64>(options.loginTimeout);
+        return static_cast<int64>(options.connTimeout);
 
     if (!strcasecmp(opt, OPT_CONN)) {
         return new QoreStringNode(options.conn);
@@ -436,7 +436,7 @@ int ODBCConnection::parseOptions(ExceptionSink* xsink) {
             QoreValue val = hi.get();
             if (val.getType() != NT_STRING) {
                 xsink->raiseException("ODBC-OPTION-ERROR", "non-string value passed for the '%s' option",
-                    OPT_QORE_TIMEZONE);
+                    OPT_CONN);
                 return -1;
             }
             const QoreStringNode* str = val.get<const QoreStringNode>();
@@ -500,9 +500,11 @@ int ODBCConnection::setLoginTimeoutOption(QoreValue val, ExceptionSink* xsink) {
                 return -1;
             const char* buf = tstr->c_str();
             for (int i = 0, limit = tstr->size(); i < limit; i++) {
-                if (!isdigit(buf[i]) && buf[i] != ' ')
+                if (!isdigit(buf[i]) && buf[i] != ' ') {
                     xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
                         OPT_LOGIN_TIMEOUT);
+                    return -1;
+                }
             }
             long int num = strtol(tstr->c_str(), 0, 10);
             if (num < 0) {
@@ -542,9 +544,11 @@ int ODBCConnection::setConnectionTimeoutOption(QoreValue val, ExceptionSink* xsi
                 return -1;
             const char* buf = tstr->c_str();
             for (int i = 0, limit = tstr->size(); i < limit; i++) {
-                if (!isdigit(buf[i]) && buf[i] != ' ')
+                if (!isdigit(buf[i]) && buf[i] != ' ') {
                     xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
                         OPT_CONN_TIMEOUT);
+                    return -1;
+                }
             }
             long int num = strtol(tstr->c_str(), 0, 10);
             if (num < 0) {

@@ -185,7 +185,10 @@ static QoreValue odbc_get_server_version(Datasource* ds, ExceptionSink* xsink) {
 
 static QoreStringNode* odbc_get_driver_real_name(Datasource* ds, ExceptionSink* xsink) {
     odbc::ODBCConnection* conn = ds->getPrivateData<odbc::ODBCConnection>();
-    assert(conn);
+    if (!conn) {
+        xsink->raiseException("ODBC-NO-CONNECTION-ERROR", "there is no open connection");
+        return nullptr;
+    }
     return conn->getDriverRealName();
 }
 
@@ -223,7 +226,7 @@ static int odbc_stmt_bind(SQLStatement* stmt, const QoreListNode& args, Exceptio
 }
 
 static int odbc_stmt_bind_placeholders(SQLStatement* stmt, const QoreListNode& args, ExceptionSink* xsink) {
-    xsink->raiseException("ODBC-BIND-PLACEHHODERS-ERROR", "binding placeholders is not necessary or supported with the odbc driver");
+    xsink->raiseException("ODBC-BIND-PLACEHOLDERS-ERROR", "binding placeholders is not necessary or supported with the odbc driver");
     return -1;
 }
 

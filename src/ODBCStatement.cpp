@@ -2918,7 +2918,7 @@ int ODBCStatement::createArrayFromStringList(const QoreListNode* arg, char*& arr
     }
 
     // We have to create one big array and put all the strings in it one after another.
-    array = paramHolder.addChars(new (std::nothrow) char[arraySize * maxlen]);
+    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * maxlen)));
     if (!array) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
             arraySize * maxlen);
@@ -2963,7 +2963,7 @@ int ODBCStatement::createArrayFromNumberList(const QoreListNode* arg, char*& arr
     }
 
     // We have to create one big array and put all the strings in it one after another.
-    array = paramHolder.addChars(new (std::nothrow) char[arraySize * maxlen]);
+    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * maxlen)));
     if (!array) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
             arraySize * maxlen);
@@ -2998,7 +2998,7 @@ int ODBCStatement::createArrayFromBinaryList(const QoreListNode* arg, void*& arr
     }
 
     // We have to create one big array and put all the binaries in it one after another (very inefficient).
-    char* charArray = paramHolder.addChars(new (std::nothrow) char[arraySize * maxlen]);
+    char* charArray = paramHolder.addChars(static_cast<char*>(malloc(arraySize * maxlen)));
     array = static_cast<void*>(charArray);
     if (!array) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
@@ -3134,7 +3134,7 @@ int ODBCStatement::createStrArrayFromIntList(const QoreListNode* arg, char*& arr
     }
 
     // We have to create one big array and put all the strings in it one after another.
-    array = paramHolder.addChars(new (std::nothrow) char[arraySize * maxlen]);
+    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * maxlen)));
     if (!array) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
             arraySize * maxlen);
@@ -3182,7 +3182,7 @@ int ODBCStatement::createArrayFromString(const QoreStringNode* arg, char*& array
     char* val = paramHolder.addChars(getCharsFromString(arg, len, xsink));
     if (!val)
         return -1;
-    array = paramHolder.addChars(new (std::nothrow) char[arraySize * len]);
+    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * len)));
     if (!array) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
             arraySize * len);
@@ -3207,7 +3207,7 @@ int ODBCStatement::createArrayFromNumber(const QoreNumberNode* arg, char*& array
     len = vh->strlen();
     size_t arraySize = arrayHolder.getArraySize();
     char* val = paramHolder.addChars(vh.giveBuffer());
-    array = paramHolder.addChars(new (std::nothrow) char[arraySize * len]);
+    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * len)));
     if (!array) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
             arraySize * len);
@@ -3229,7 +3229,7 @@ int ODBCStatement::createArrayFromBinary(const BinaryNode* arg, void*& array, SQ
     len = arg->size();
     size_t arraySize = arrayHolder.getArraySize();
     void* val = const_cast<void*>(arg->getPtr());
-    char* charArray = paramHolder.addChars(new (std::nothrow) char[arraySize * len]);
+    char* charArray = paramHolder.addChars(static_cast<char*>(malloc(arraySize * len)));
     if (!charArray) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %d bytes",
             arraySize * len);
@@ -3302,7 +3302,7 @@ int ODBCStatement::createStrArrayFromInt(QoreValue arg, char*& array, SQLLEN*& i
     len = vh->strlen();
     size_t arraySize = arrayHolder.getArraySize();
     char* val = paramHolder.addChars(vh.giveBuffer());
-    array = paramHolder.addChars(new (std::nothrow) char[arraySize * len]);
+    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * len)));
     if (!array) {
         xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
             arraySize*len);
@@ -3465,32 +3465,36 @@ QoreValue ODBCStatement::getColumnValue(int column, ODBCResultColumn& rcol, Exce
                 } else {
                     SQLLEN buflen = indicator + 1; // Ending \0 char.
                     //printd(5, "column has length %d bytes\n", (int)indicator);
-                    std::unique_ptr<char> buf(new (std::nothrow) char[buflen]);
-                    if (!buf.get()) {
+                    char* buf = static_cast<char*>(malloc(buflen));
+                    if (!buf) {
                         xsink->raiseException("DBI:ODBC:MEMORY-ERROR",
                             "could not allocate buffer of " QLLD " bytes for character data in row #%d column #%d",
                             buflen, readRows, column);
                         return QoreValue();
                     }
                     if (!indicator) {
+                        free(buf);
                         return new QoreStringNode(getQoreEncoding());
                     }
-                    ret = SQLGetData(stmt, column, SQL_C_CHAR, reinterpret_cast<SQLPOINTER>(buf.get()), buflen,
+                    ret = SQLGetData(stmt, column, SQL_C_CHAR, reinterpret_cast<SQLPOINTER>(buf), buflen,
                         &indicator);
                     if (SQL_SUCCEEDED(ret)) {
                         // PostgreSQL-specific hack, needed because it returns BOOLEANs as VARCHAR values '0' & '1'
-                        if (buflen >= 2 && !buf.get()[1] && (buf.get()[0] == '0' || buf.get()[0] == '1')) {
+                        if (buflen >= 2 && !buf[1] && (buf[0] == '0' || buf[0] == '1')) {
                             char descTypeName[32];
                             SQLColAttributeA(stmt, column, SQL_DESC_TYPE_NAME, descTypeName, 32, 0, 0);
                             if (strcmp(descTypeName, "bool") == 0) {
-                                return (bool)((buf.get()[0]) - 48);
+                                bool rv = (buf[0] != '0');
+                                free(buf);
+                                return rv;
                             }
                         }
 
-                        QoreStringNodeHolder rv(new QoreStringNode(buf.release(), indicator, buflen, getQoreEncoding()));
+                        QoreStringNodeHolder rv(new QoreStringNode(buf, indicator, buflen, getQoreEncoding()));
                         rv->trim_trailing(' ');
                         return rv.release();
                     }
+                    free(buf);
                 }
             }
             break;
@@ -3506,18 +3510,19 @@ QoreValue ODBCStatement::getColumnValue(int column, ODBCResultColumn& rcol, Exce
                 return new BinaryNode;
             if (SQL_SUCCEEDED(ret) && (indicator != SQL_NULL_DATA)) {
                 SQLLEN size = indicator;
-                std::unique_ptr<char> buf(new (std::nothrow) char[size]);
-                if (!buf.get()) {
+                void* buf = malloc(size);
+                if (!buf) {
                     xsink->raiseException("DBI:ODBC:MEMORY-ERROR",
                         "could not allocate buffer for result binary data of row #%d column #%d",
                         readRows, column);
                     return QoreValue();
                 }
-                ret = SQLGetData(stmt, column, SQL_C_BINARY, reinterpret_cast<void*>(buf.get()), size, &indicator);
+                ret = SQLGetData(stmt, column, SQL_C_BINARY, buf, size, &indicator);
                 if (SQL_SUCCEEDED(ret)) {
-                    SimpleRefHolder<BinaryNode> bin(new BinaryNode(buf.release(), size));
+                    SimpleRefHolder<BinaryNode> bin(new BinaryNode(buf, size));
                     return bin.release();
                 }
+                free(buf);
             }
             break;
         }
