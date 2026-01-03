@@ -300,6 +300,11 @@ QoreHashNode* ODBCStatement::getOutputHash(ExceptionSink* xsink, bool emptyHashI
 
     int rowCount = 0;
     while (true) {
+        // Check for interrupt periodically during fetch (every 100 rows)
+        if ((rowCount % 100) == 0 && qore_check_io_interrupt(xsink)) {
+            return 0;
+        }
+
         SQLRETURN ret = SQLFetch(stmt);
         if (ret == SQL_NO_DATA) { // Reached the end of the result-set.
             break;
@@ -347,6 +352,11 @@ QoreListNode* ODBCStatement::getOutputList(ExceptionSink* xsink, int maxRows) {
     int rowCount = 0;
     GetRowInternStatus status;
     while (true) {
+        // Check for interrupt periodically during fetch (every 100 rows)
+        if ((rowCount % 100) == 0 && qore_check_io_interrupt(xsink)) {
+            return 0;
+        }
+
         ReferenceHolder<QoreHashNode> h(getRowIntern(status, xsink), xsink);
         if (status == EGRIS_OK) { // Ok.
             l->push(h.release(), xsink);
@@ -488,6 +498,12 @@ int ODBCStatement::resetAfterLostConnection(ExceptionSink* xsink) {
 
 int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink* xsink) {
     //fprintf(stderr, "exec: '%s'\non connection: %p\n", command.c_str(), conn);
+
+    // Check for interrupt before query execution
+    if (qore_check_io_interrupt(xsink)) {
+        return -1;
+    }
+
     SQLRETURN ret;
     if (str) {
         ret = SQLExecDirectA(stmt, reinterpret_cast<SQLCHAR*>(const_cast<char*>(str)), textLen);
@@ -553,6 +569,11 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
 #endif
             // Clear any exceptions that have been ignored.
             xsink->clear();
+
+            // Check for interrupt before re-executing query after reconnection
+            if (qore_check_io_interrupt(xsink)) {
+                return -1;
+            }
 
             // Re-execute.
             if (str) {

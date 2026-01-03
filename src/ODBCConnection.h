@@ -36,6 +36,7 @@
 #include <string>
 
 #include "qore/Qore.h"
+#include <qore/QoreSandboxManager.h>
 
 #include "ODBCOptions.h"
 

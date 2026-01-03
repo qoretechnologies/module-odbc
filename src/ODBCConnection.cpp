@@ -106,6 +106,11 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
     SQLSetConnectAttr(dbc, SQL_ATTR_LOGIN_TIMEOUT, (SQLPOINTER)(size_t)options.loginTimeout, SQL_IS_UINTEGER);
     SQLSetConnectAttr(dbc, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)(size_t)options.connTimeout, SQL_IS_UINTEGER);
 
+    // Check for interrupt before connection attempt
+    if (qore_check_io_interrupt(xsink)) {
+        return -1;
+    }
+
     // Connect
     ret = SQLDriverConnectA(dbc, 0, (SQLCHAR*)connStr.c_str(), connStr.length(), 0, 0, 0, SQL_DRIVER_NOPROMPT);
     if (!SQL_SUCCEEDED(ret)) { // error
