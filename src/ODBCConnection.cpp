@@ -126,6 +126,15 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
 
 void ODBCConnection::disconnect() {
     while (connected) {
+        // Check for interrupt in disconnect retry loop
+        // Use isInterruptRequested() directly since we can't propagate exceptions from disconnect()
+        QoreSandboxManager* sm = runtime_get_sandbox_manager();
+        if (sm && sm->isInterruptRequested()) {
+            // Force disconnect on interrupt
+            connected = false;
+            break;
+        }
+
         SQLRETURN ret = SQLDisconnect(dbc);
         if (SQL_SUCCEEDED(ret)) {
             connected = false;
