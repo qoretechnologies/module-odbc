@@ -34,8 +34,10 @@ else()
 
   find_library( ODBC_LIBRARY NAMES iodbc odbc odbc32
     PATHS
+    /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}
     /usr/lib
     /usr/lib/odbc
+    /lib/${CMAKE_LIBRARY_ARCHITECTURE}
     /usr/local/lib
     /usr/local/lib/odbc
     /usr/local/odbc/lib
