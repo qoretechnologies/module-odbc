@@ -41,24 +41,24 @@
 void init_odbc_functions(QoreNamespace& ns);
 void init_odbc_constants(QoreNamespace& ns);
 
-QoreStringNode *odbc_module_init();
-void odbc_module_ns_init(QoreNamespace *rns, QoreNamespace *qns);
-void odbc_module_delete();
+static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink);
+static void odbc_module_ns_init(QoreNamespace* rns, QoreNamespace* qns, ExceptionSink& xsink);
+static void odbc_module_delete();
 
-// qore module symbols
-DLLEXPORT char qore_module_name[] = "odbc";
-DLLEXPORT char qore_module_version[] = PACKAGE_VERSION;
-DLLEXPORT char qore_module_description[] = "ODBC database driver module";
-DLLEXPORT char qore_module_author[] = "Ondrej Musil <ondrej.musil@qoretechnologies.com>";
-DLLEXPORT char qore_module_url[] = "https://github.com/qorelanguage/module-odbc";
-DLLEXPORT int qore_module_api_major = QORE_MODULE_API_MAJOR;
-DLLEXPORT int qore_module_api_minor = QORE_MODULE_API_MINOR;
-DLLEXPORT qore_module_init_t qore_module_init = odbc_module_init;
-DLLEXPORT qore_module_ns_init_t qore_module_ns_init = odbc_module_ns_init;
-DLLEXPORT qore_module_delete_t qore_module_delete = odbc_module_delete;
-
-DLLEXPORT qore_license_t qore_module_license = QL_MIT;
-DLLEXPORT char qore_module_license_str[] = "MIT";
+extern "C" DLLEXPORT void odbc_qore_module_desc(QoreModuleInfo& mod_info) {
+    mod_info.name = "odbc";
+    mod_info.version = PACKAGE_VERSION;
+    mod_info.desc = "ODBC database driver module";
+    mod_info.author = "Ondrej Musil <ondrej.musil@qoretechnologies.com>";
+    mod_info.url = "https://github.com/qorelanguage/module-odbc";
+    mod_info.api_major = QORE_MODULE_API_MAJOR;
+    mod_info.api_minor = QORE_MODULE_API_MINOR;
+    mod_info.init = odbc_module_init;
+    mod_info.ns_init = odbc_module_ns_init;
+    mod_info.del = odbc_module_delete;
+    mod_info.license = QL_MIT;
+    mod_info.license_str = "MIT";
+}
 
 static DBIDriver* DBID_ODBC;
 
@@ -342,7 +342,7 @@ static QoreValue odbc_opt_get(const Datasource* ds, const char* opt) {
 
 QoreNamespace OdbcNS("odbc");
 
-QoreStringNode *odbc_module_init() {
+static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
     init_odbc_functions(OdbcNS);
     init_odbc_constants(OdbcNS);
 
@@ -404,14 +404,12 @@ QoreStringNode *odbc_module_init() {
     methods.registerOption(OPT_PRESERVE_CASE, "if set, case is preserved in results");
 
     DBID_ODBC = DBI.registerDriver("odbc", methods, DBI_ODBC_CAPS);
-
-    return 0;
 }
 
-void odbc_module_ns_init(QoreNamespace *rns, QoreNamespace *qns) {
+static void odbc_module_ns_init(QoreNamespace* rns, QoreNamespace* qns, ExceptionSink& xsink) {
     qns->addNamespace(OdbcNS.copy());
 }
 
-void odbc_module_delete() {
+static void odbc_module_delete() {
     // nothing to do here in this case
 }
