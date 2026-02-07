@@ -128,8 +128,8 @@ void ODBCConnection::disconnect() {
     while (connected) {
         // Check for interrupt in disconnect retry loop
         // Use isInterruptRequested() directly since we can't propagate exceptions from disconnect()
-        QoreSandboxManager* sm = runtime_get_sandbox_manager();
-        if (sm && sm->isInterruptRequested()) {
+        QoreSandboxManagerHelper smh;
+        if (smh && smh->isInterruptRequested()) {
             // Force disconnect on interrupt
             connected = false;
             break;
