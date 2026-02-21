@@ -4,7 +4,7 @@
 
     Qore ODBC module
 
-    Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+    Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -107,7 +107,7 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
     SQLSetConnectAttr(dbc, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)(size_t)options.connTimeout, SQL_IS_UINTEGER);
 
     // Check for interrupt before connection attempt
-    if (qore_check_io_interrupt(xsink)) {
+    if (qore_check_cancel(xsink)) {
         return -1;
     }
 
@@ -127,9 +127,7 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
 void ODBCConnection::disconnect() {
     while (connected) {
         // Check for interrupt in disconnect retry loop
-        // Use isInterruptRequested() directly since we can't propagate exceptions from disconnect()
-        QoreSandboxManagerHelper smh;
-        if (smh && smh->isInterruptRequested()) {
+        if (qore_check_cancel(nullptr, "ODBC disconnect")) {
             // Force disconnect on interrupt
             connected = false;
             break;

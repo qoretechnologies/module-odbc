@@ -4,7 +4,7 @@
 
   Qore ODBC module
 
-  Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+  Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
   Permission is hereby granted, free of charge, to any person obtaining a
   copy of this software and associated documentation files (the "Software"),
@@ -301,7 +301,7 @@ QoreHashNode* ODBCStatement::getOutputHash(ExceptionSink* xsink, bool emptyHashI
     int rowCount = 0;
     while (true) {
         // Check for interrupt periodically during fetch (every 100 rows)
-        if ((rowCount % 100) == 0 && qore_check_io_interrupt(xsink)) {
+        if ((rowCount % 100) == 0 && qore_check_cancel(xsink)) {
             return 0;
         }
 
@@ -353,7 +353,7 @@ QoreListNode* ODBCStatement::getOutputList(ExceptionSink* xsink, int maxRows) {
     GetRowInternStatus status;
     while (true) {
         // Check for interrupt periodically during fetch (every 100 rows)
-        if ((rowCount % 100) == 0 && qore_check_io_interrupt(xsink)) {
+        if ((rowCount % 100) == 0 && qore_check_cancel(xsink)) {
             return 0;
         }
 
@@ -500,7 +500,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
     //fprintf(stderr, "exec: '%s'\non connection: %p\n", command.c_str(), conn);
 
     // Check for interrupt before query execution
-    if (qore_check_io_interrupt(xsink)) {
+    if (qore_check_cancel(xsink)) {
         return -1;
     }
 
@@ -571,7 +571,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
             xsink->clear();
 
             // Check for interrupt before re-executing query after reconnection
-            if (qore_check_io_interrupt(xsink)) {
+            if (qore_check_cancel(xsink)) {
                 return -1;
             }
 
