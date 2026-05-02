@@ -886,7 +886,7 @@ private:
 
         @return 0 for OK, -1 for error
      */
-    DLLLOCAL int createArrayFromString(const QoreStringNode* arg, char*& array, SQLLEN*& indArray, size_t& len, ExceptionSink* xsink);
+    DLLLOCAL int createArrayFromString(const QoreValue& arg, char*& array, SQLLEN*& indArray, size_t& len, ExceptionSink* xsink);
 
     //! Create a new char array filled with the passed stringified number.
     /** @param arg number used to fill the array
@@ -981,7 +981,7 @@ private:
 
         @return pointer to the new string (caller owns it) or 0 in case of error
      */
-    DLLLOCAL inline char* getCharsFromString(const QoreStringNode* arg, size_t& len, ExceptionSink* xsink);
+    DLLLOCAL inline char* getCharsFromString(const QoreValue& arg, size_t& len, ExceptionSink* xsink);
 
     //! Get an ODBC timestamp from Qore date value.
     /** @param arg source Qore date
@@ -1109,8 +1109,9 @@ public:
     }
 };
 
-char* ODBCStatement::getCharsFromString(const QoreStringNode* arg, size_t& len, ExceptionSink* xsink) {
-    TempEncodingHelper tstr(arg, getQoreEncoding(), xsink);
+char* ODBCStatement::getCharsFromString(const QoreValue& arg, size_t& len, ExceptionSink* xsink) {
+    QoreStringValueHelper str(arg);
+    TempEncodingHelper tstr(*str, getQoreEncoding(), xsink);
     if (*xsink) {
         return nullptr;
     }

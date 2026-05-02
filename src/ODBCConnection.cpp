@@ -285,8 +285,8 @@ int ODBCConnection::setOption(const char* opt, QoreValue val, ExceptionSink* xsi
         return setFracPrecisionOption(val, xsink);
     } else if (!strcasecmp(opt, OPT_QORE_TIMEZONE)) {
         if (val.getType() == NT_STRING) {
-            const QoreStringNode* str = val.get<const QoreStringNode>();
-            TempEncodingHelper tzName(str, QCS_UTF8, xsink);
+            QoreStringValueHelper str(val);
+            TempEncodingHelper tzName(*str, QCS_UTF8, xsink);
             if (*xsink)
                 return -1;
             serverTz = find_create_timezone(tzName->c_str(), xsink);
@@ -425,7 +425,7 @@ int ODBCConnection::parseOptions(ExceptionSink* xsink) {
                     OPT_QORE_TIMEZONE);
                 return -1;
             }
-            const QoreStringNode* str = val.get<const QoreStringNode>();
+            QoreStringValueHelper str(val);
             const AbstractQoreZoneInfo* tz = find_create_timezone(str->c_str(), xsink);
             if (*xsink)
                 return -1;
@@ -451,8 +451,8 @@ int ODBCConnection::parseOptions(ExceptionSink* xsink) {
                     OPT_CONN);
                 return -1;
             }
-            const QoreStringNode* str = val.get<const QoreStringNode>();
-            options.conn = str->c_str();
+            QoreStringValueHelper str(val);
+            options.conn.assign(str->c_str(), str->size());
             continue;
         }
     }
@@ -470,8 +470,8 @@ int ODBCConnection::setFracPrecisionOption(QoreValue val, ExceptionSink* xsink) 
             }
             options.frPrec = i;
         } else if (val.getType() == NT_STRING) {
-            const QoreStringNode* str = val.get<const QoreStringNode>();
-            TempEncodingHelper tstr(str, QCS_UTF8, xsink);
+            QoreStringValueHelper str(val);
+            TempEncodingHelper tstr(*str, QCS_UTF8, xsink);
             if (*xsink)
                 return -1;
             long int num = strtol(tstr->c_str(), 0, 10);
@@ -506,8 +506,8 @@ int ODBCConnection::setLoginTimeoutOption(QoreValue val, ExceptionSink* xsink) {
             }
             options.loginTimeout = i;
         } else if (val.getType() == NT_STRING) {
-            const QoreStringNode* str = val.get<const QoreStringNode>();
-            TempEncodingHelper tstr(str, QCS_UTF8, xsink);
+            QoreStringValueHelper str(val);
+            TempEncodingHelper tstr(*str, QCS_UTF8, xsink);
             if (*xsink)
                 return -1;
             const char* buf = tstr->c_str();
@@ -550,8 +550,8 @@ int ODBCConnection::setConnectionTimeoutOption(QoreValue val, ExceptionSink* xsi
             }
             options.connTimeout = i;
         } else if (val.getType() == NT_STRING) {
-            const QoreStringNode* str = val.get<const QoreStringNode>();
-            TempEncodingHelper tstr(str, QCS_UTF8, xsink);
+            QoreStringValueHelper str(val);
+            TempEncodingHelper tstr(*str, QCS_UTF8, xsink);
             if (*xsink)
                 return -1;
             const char* buf = tstr->c_str();
@@ -646,8 +646,8 @@ int ODBCConnection::prepareConnectionString(ExceptionSink* xsink) {
         qore_type_t ntype = val.getType();
         switch (ntype) {
             case NT_STRING: {
-                const QoreStringNode* strNode = val.get<const QoreStringNode>();
-                TempEncodingHelper tstr(strNode, QCS_UTF8, xsink);
+                QoreStringValueHelper strNode(val);
+                TempEncodingHelper tstr(*strNode, QCS_UTF8, xsink);
                 if (*xsink) {
                     return -1;
                 }

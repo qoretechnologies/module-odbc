@@ -812,9 +812,8 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
         qore_type_t ntype = arg.getType();
         switch (ntype) {
             case NT_STRING: {
-                const QoreStringNode* str = arg.get<const QoreStringNode>();
                 size_t len;
-                char* cstr = paramHolder.addChars(getCharsFromString(str, len, xsink));
+                char* cstr = paramHolder.addChars(getCharsFromString(arg, len, xsink));
                 if (*xsink)
                     return -1;
                 SQLLEN* indPtr = paramHolder.addLength(len);
@@ -1289,7 +1288,7 @@ int ODBCStatement::bindParamArraySingleValue(int column, QoreValue arg, Exceptio
         case NT_STRING: {
             size_t len;
             char* array;
-            if (createArrayFromString(arg.get<const QoreStringNode>(), array, indArray, len, xsink))
+            if (createArrayFromString(arg, array, indArray, len, xsink))
                 return -1;
             ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR,
                 len, 0, reinterpret_cast<SQLCHAR*>(array), len, indArray);
@@ -2929,7 +2928,7 @@ int ODBCStatement::createArrayFromStringList(const QoreListNode* arg, char*& arr
         }
 
         size_t len = 0;
-        stringArray[i] = getCharsFromString(str.get<const QoreStringNode>(), len, xsink);
+        stringArray[i] = getCharsFromString(str, len, xsink);
         if (*xsink) {
             return -1;
         }
@@ -3194,7 +3193,7 @@ int ODBCStatement::createArrayFromFloatList(const QoreListNode* arg, double*& ar
     return 0;
 }
 
-int ODBCStatement::createArrayFromString(const QoreStringNode* arg, char*& array, SQLLEN*& indArray, size_t& len,
+int ODBCStatement::createArrayFromString(const QoreValue& arg, char*& array, SQLLEN*& indArray, size_t& len,
         ExceptionSink* xsink) {
     indArray = arrayHolder.addIndArray(xsink);
     if (!indArray)
