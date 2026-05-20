@@ -206,6 +206,36 @@ QoreValue ODBCConnection::select(const QoreString* qstr, const QoreListNode* arg
     return res.rowsAffected();
 }
 
+#ifdef QDBI_METHOD_SELECT_TYPED
+QoreValue ODBCConnection::selectTyped(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
+    ODBCStatement res(this, xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    if (res.exec(qstr, args, xsink)) {
+        return QoreValue();
+    }
+
+    if (!res.hasResultData()) {
+        return res.rowsAffected();
+    }
+
+    ReferenceHolder<QoreHashNode> columns(res.getOutputHash(xsink, false), xsink);
+    if (*xsink || !columns) {
+        return QoreValue();
+    }
+
+    ReferenceHolder<QoreHashNode> desc(res.describe(xsink), xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    QoreHashNode* rv = qore_dbi_make_typed_select_result(ds, *columns, *desc, xsink);
+    return rv ? QoreValue(rv) : QoreValue();
+}
+#endif
+
 QoreListNode* ODBCConnection::selectRows(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
     ODBCStatement res(this, xsink);
     if (*xsink)
@@ -216,6 +246,32 @@ QoreListNode* ODBCConnection::selectRows(const QoreString* qstr, const QoreListN
 
     return res.getOutputList(xsink);
 }
+
+#ifdef QDBI_METHOD_SELECT_TYPED
+QoreValue ODBCConnection::selectRowsTyped(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
+    ODBCStatement res(this, xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    if (res.exec(qstr, args, xsink)) {
+        return QoreValue();
+    }
+
+    ReferenceHolder<QoreListNode> rows(res.getOutputList(xsink), xsink);
+    if (*xsink || !rows) {
+        return QoreValue();
+    }
+
+    ReferenceHolder<QoreHashNode> desc(res.describe(xsink), xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    QoreListNode* rv = qore_dbi_make_typed_select_rows_result(ds, *rows, *desc, xsink);
+    return rv ? QoreValue(rv) : QoreValue();
+}
+#endif
 
 QoreHashNode* ODBCConnection::selectRow(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
     ODBCStatement res(this, xsink);

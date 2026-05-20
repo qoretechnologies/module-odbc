@@ -94,6 +94,9 @@ public:
         @return 0 for OK, -1 for error
      */
     DLLLOCAL QoreValue select(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink);
+#ifdef QDBI_METHOD_SELECT_TYPED
+    DLLLOCAL QoreValue selectTyped(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink);
+#endif
 
     //! Select multiple rows from the database.
     /** @param qstr Qore-style SQL statement
@@ -103,6 +106,9 @@ public:
         @return a list of row hashes
      */
     DLLLOCAL QoreListNode* selectRows(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink);
+#ifdef QDBI_METHOD_SELECT_TYPED
+    DLLLOCAL QoreValue selectRowsTyped(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink);
+#endif
 
     //! Select one row from the database.
     /** @param qstr Qore-style SQL statement
@@ -314,4 +320,3 @@ private:
 } // namespace odbc
 
 #endif // _QORE_MODULE_ODBC_ODBCCONNECTION_H
-
