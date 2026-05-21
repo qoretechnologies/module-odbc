@@ -27,6 +27,10 @@
 
 #include "ODBCConnection.h"
 
+#if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
+#include <qore/QoreColumnarResult.h>
+#endif
+
 #include "qore/QoreLib.h"
 #include "qore/DBI.h"
 
@@ -233,6 +237,38 @@ QoreValue ODBCConnection::selectTyped(const QoreString* qstr, const QoreListNode
 
     QoreHashNode* rv = qore_dbi_make_typed_select_result(ds, *columns, *desc, xsink);
     return rv ? QoreValue(rv) : QoreValue();
+}
+#endif
+
+#ifdef QDBI_METHOD_SELECT_COLUMNAR
+QoreColumnarResult* ODBCConnection::selectColumnar(const QoreString* qstr, const QoreListNode* args,
+        ExceptionSink* xsink) {
+    ODBCStatement res(this, xsink);
+    if (*xsink) {
+        return nullptr;
+    }
+
+    if (res.exec(qstr, args, xsink)) {
+        return nullptr;
+    }
+
+    if (!res.hasResultData()) {
+        xsink->raiseException("COLUMNAR-RESULT-ERROR",
+            "Datasource::selectColumnar() requires an SQL statement returning result columns");
+        return nullptr;
+    }
+
+    ReferenceHolder<QoreHashNode> columns(res.getOutputHash(xsink, false), xsink);
+    if (*xsink || !columns) {
+        return nullptr;
+    }
+
+    ReferenceHolder<QoreHashNode> desc(res.describe(xsink), xsink);
+    if (*xsink) {
+        return nullptr;
+    }
+
+    return QoreColumnarResult::fromColumnHash(*columns, *desc, xsink);
 }
 #endif
 

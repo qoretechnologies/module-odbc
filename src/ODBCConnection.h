@@ -41,6 +41,7 @@
 #include "ODBCOptions.h"
 
 class AbstractQoreZoneInfo;
+class QoreColumnarResult;
 
 namespace odbc {
 
@@ -96,6 +97,10 @@ public:
     DLLLOCAL QoreValue select(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink);
 #ifdef QDBI_METHOD_SELECT_TYPED
     DLLLOCAL QoreValue selectTyped(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink);
+#endif
+#ifdef QDBI_METHOD_SELECT_COLUMNAR
+    DLLLOCAL QoreColumnarResult* selectColumnar(const QoreString* qstr, const QoreListNode* args,
+        ExceptionSink* xsink);
 #endif
 
     //! Select multiple rows from the database.
