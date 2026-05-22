@@ -147,8 +147,7 @@ class OdbcTest inherits QUnit::Test {
             },
             "myyr": {
                 "type": "YEAR",
-                "values": (2016-01-11, 2012-01-11, 2016-01-30, 1970-01-11),
-                "expected": (2016-00-00, 2012-00-00, 2016-00-00, 1970-00-00),
+                "values": (2016, 2012, 2016, 1970),
             },
             "mytstamp": {
                 "type": "TIMESTAMP(3)",
@@ -540,6 +539,12 @@ class OdbcTest inherits QUnit::Test {
 
         # Try additional MySQL types.
         if (mysqlDB) {
+            Columns.fltp.expected = (1.72, 3.145679, 0.0, -2.721828);
+            Columns.r.expected = (0.003906, 0.007812, -0.007812, 0.0);
+            Columns.rodb.expected = (0.003906, 0.007812, -0.007812, 0.0);
+            Columns.flt.expected = (0.0039059999398887157, 0.0078119998797774315, -0.0078119998797774315, 0.0);
+            Columns.dbl.expected = (1.72, 3.145679, 0.0, -2.721828);
+
             string mysqlTable = "mysql_types_test";
             try { ds.exec("DROP TABLE " + mysqlTable); } catch (hash<ExceptionInfo> e) {}
             HashIterator mysql(MysqlColumns);
@@ -560,13 +565,9 @@ class OdbcTest inherits QUnit::Test {
                             exp += <00>;
                     }
                 } else if (mysql.getKey() == "mydtime") {
-                    for (int i = 0; i < Columns.mydtime.values.size(); i++) {
-                        push Columns.mydtime.expected, utcTz.date(Columns.mydtime.values[i]);
-                    }
+                    Columns.mydtime.expected = Columns.mydtime.values;
                 } else if (mysql.getKey() == "mytstamp") {
-                    for (int i = 0; i < Columns.mytstamp.values.size(); i++) {
-                        push Columns.mytstamp.expected, utcTz.date(Columns.mytstamp.values[i]);
-                    }
+                    Columns.mytstamp.expected = Columns.mytstamp.values;
                 }
             }
         }
@@ -919,6 +920,22 @@ class OdbcTest inherits QUnit::Test {
             stmt.next();
             assertEq(row, stmt.getValue());
         }
+        stmt.close();
+
+        ds.exec("DROP TABLE " + tableName);
+        ds.commit();
+
+        ret = ds.exec("CREATE TABLE " + tableName + " (id int)");
+        assertTrue(ret == 0 || ret == -1 || ret.typeCode() == NOTHING);
+        ds.commit();
+
+        stmt = ds.getSQLStatement();
+        stmt.prepare("INSERT INTO " + tableName + " (id) VALUES (%v)");
+        stmt.bindArgs((odbc_bind(ODBCT_SLONG, (7, 8, 9)),));
+        stmt.exec();
+        stmt.commit();
+
+        assertEq({"id": (7, 8, 9)}, ds.select("SELECT * FROM " + tableName + " ORDER BY id"));
     }
 
     connectionInfoTest() {

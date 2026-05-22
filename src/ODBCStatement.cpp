@@ -776,8 +776,17 @@ size_t ODBCStatement::findArraySizeOfArgs(const QoreListNode* args) const {
     for (unsigned int i = 0; i < count; i++) {
         QoreValue arg = args->retrieveEntry(i);
         qore_type_t ntype = arg.getType();
-        if (ntype == NT_LIST)
+        if (ntype == NT_LIST) {
             return arg.get<const QoreListNode>()->size();
+        }
+        if (ntype == NT_HASH) {
+            const QoreHashNode* h = arg.get<const QoreHashNode>();
+            QoreValue odbct = h->getKeyValue("^odbct^");
+            QoreValue value = h->getKeyValue("^value^");
+            if (odbct.getType() == NT_INT && value.getType() == NT_LIST) {
+                return value.get<const QoreListNode>()->size();
+            }
+        }
     }
     return 0;
 }
@@ -1520,8 +1529,9 @@ int ODBCStatement::bindTypeULong(int column, QoreValue arg, SQLRETURN& ret, Exce
         return -1;
     }
     int64 n = arg.getAsBigInt();
-    if (n < 0 || n > static_cast<int64>(ULONG_MAX)) {
-        xsink->raiseException("ODBC-BIND-ERROR", "integer value %ld does not fit the limits of ODBCT_ULONG odbc_bind",
+    if (n < 0 || n > static_cast<int64>(UINT_MAX)) {
+        xsink->raiseException("ODBC-BIND-ERROR", "integer value " QLLD " does not fit the limits of ODBCT_ULONG "
+            "odbc_bind",
             n);
         return -1;
     }
@@ -1566,7 +1576,7 @@ int ODBCStatement::bindTypeUShort(int column, QoreValue arg, SQLRETURN& ret, Exc
 
     uint16_t* ival = paramHolder.addUint16(static_cast<uint16_t>(n));
     ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
-        SQL_SMALLINT, SMALLINT_COLSIZE, 0, ival, sizeof(uint16_t), 0);
+        SQL_INTEGER, INTEGER_COLSIZE, 0, ival, sizeof(uint16_t), 0);
     return 0;
 }
 
@@ -1602,9 +1612,9 @@ int ODBCStatement::bindTypeUTinyint(int column, QoreValue arg, SQLRETURN& ret, E
         return -1;
     }
 
-    uint8_t* ival = paramHolder.addUint8(static_cast<uint8_t>(n));
-    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_UTINYINT,
-        SQL_TINYINT, TINYINT_COLSIZE, 0, ival, sizeof(uint8_t), 0);
+    uint16_t* ival = paramHolder.addUint16(static_cast<uint16_t>(n));
+    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
+        SQL_INTEGER, INTEGER_COLSIZE, 0, ival, sizeof(uint16_t), 0);
     return 0;
 }
 
@@ -1984,7 +1994,7 @@ int ODBCStatement::bindTypeULongArray(int column, QoreValue arg, SQLRETURN& ret,
         }
         for (size_t i = 0; i < arraySize; i++) {
             int64 n = lst->retrieveEntry(i).getAsBigInt();
-            if (n < 0 || n > static_cast<int64>(ULONG_MAX)) {
+            if (n < 0 || n > static_cast<int64>(UINT_MAX)) {
                 xsink->raiseException("ODBC-BIND-ERROR", "integer value " QLLD " does not fit the limits of "
                     "ODBCT_ULONG odbc_bind", n);
                 return -1;
@@ -1993,7 +2003,7 @@ int ODBCStatement::bindTypeULongArray(int column, QoreValue arg, SQLRETURN& ret,
         }
     } else if (argtype == NT_INT) {
         int64 n = arg.getAsBigInt();
-        if (n < 0 || n > static_cast<int64>(ULONG_MAX)) {
+        if (n < 0 || n > static_cast<int64>(UINT_MAX)) {
             xsink->raiseException("ODBC-BIND-ERROR", "integer value " QLLD " does not fit the limits of ODBCT_ULONG "
                 "odbc_bind", n);
             return -1;
@@ -2095,7 +2105,7 @@ int ODBCStatement::bindTypeUShortArray(int column, QoreValue arg, SQLRETURN& ret
     }
 
     ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
-        SQL_SMALLINT, SMALLINT_COLSIZE, 0, array, sizeof(uint16_t), 0);
+        SQL_INTEGER, INTEGER_COLSIZE, 0, array, sizeof(uint16_t), 0);
     return 0;
 }
 
@@ -2147,7 +2157,7 @@ int ODBCStatement::bindTypeSTinyintArray(int column, QoreValue arg, SQLRETURN& r
 int ODBCStatement::bindTypeUTinyintArray(int column, QoreValue arg, SQLRETURN& ret, ExceptionSink* xsink) {
     qore_type_t argtype = arg.getType();
     size_t arraySize = arrayHolder.getArraySize();
-    uint8_t* array = arrayHolder.addUint8Array(xsink);
+    uint16_t* array = arrayHolder.addUint16Array(xsink);
     if (!array)
         return -1;
 
@@ -2167,7 +2177,7 @@ int ODBCStatement::bindTypeUTinyintArray(int column, QoreValue arg, SQLRETURN& r
                     "ODBCT_UTINYINT odbc_bind", n);
                 return -1;
             }
-            array[i] = static_cast<uint8_t>(n);
+            array[i] = static_cast<uint16_t>(n);
         }
     } else if (argtype == NT_INT) {
         int64 n = arg.getAsBigInt();
@@ -2178,15 +2188,15 @@ int ODBCStatement::bindTypeUTinyintArray(int column, QoreValue arg, SQLRETURN& r
         }
 
         for (size_t i = 0; i < arraySize; i++)
-            array[i] = static_cast<uint8_t>(n);
+            array[i] = static_cast<uint16_t>(n);
     } else {
         xsink->raiseException("ODBC-BIND-ERROR", "non-int value or non-int list passed with ODBCT_UTINYINT "
             "odbc_bind");
         return -1;
     }
 
-    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_UTINYINT,
-        SQL_TINYINT, TINYINT_COLSIZE, 0, array, sizeof(uint8_t), 0);
+    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
+        SQL_INTEGER, INTEGER_COLSIZE, 0, array, sizeof(uint16_t), 0);
     return 0;
 }
 
