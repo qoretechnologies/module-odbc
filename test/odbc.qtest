@@ -703,10 +703,22 @@ class OdbcTest inherits QUnit::Test {
         assertThrows("ODBC-BIND-ERROR", "hash parameter not in correct format for odbc_bind",
             sub() { ds.exec("INSERT INTO " + tableName + " (id, txt) VALUES (%v, %v)", 3, {}); });
 
+        assertEq(1, ds.exec("INSERT INTO " + tableName + " (id, txt) VALUES (%v, %v)", odbc_bind(ODBCT_SLONG, 3),
+            "scalar odbc_bind"));
+        ds.commit();
+
         assertThrows("ODBC-EXEC-ERROR", "error in statement execution", sub() { ds.exec("bla bla bla"); });
 
-        hash results1 = {"id": (1, 2), "txt": ("abcdef123456", "test 789 abc lorem ipsum"), "txt1": ("abc123", NULL)};
-        list results2 = ({"id": 1, "txt": "abcdef123456", "txt1": "abc123"}, {"id": 2, "txt": "test 789 abc lorem ipsum", "txt1": NULL});
+        hash results1 = {
+            "id": (1, 2, 3),
+            "txt": ("abcdef123456", "test 789 abc lorem ipsum", "scalar odbc_bind"),
+            "txt1": ("abc123", NULL, NULL),
+        };
+        list results2 = (
+            {"id": 1, "txt": "abcdef123456", "txt1": "abc123"},
+            {"id": 2, "txt": "test 789 abc lorem ipsum", "txt1": NULL},
+            {"id": 3, "txt": "scalar odbc_bind", "txt1": NULL},
+        );
 
         on_error ds.rollback();
         ret = ds.exec("SELECT * FROM " + tableName);

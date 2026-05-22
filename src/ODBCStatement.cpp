@@ -596,7 +596,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
     }
 
     // Get count of affected rows.
-    SQLLEN len;
+    SQLLEN len = -1;
     ret = SQLRowCount(stmt, &len);
     if (SQL_SUCCEEDED(ret)) {
         affectedRowCount = len;
@@ -991,6 +991,7 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
                             QLLD, odbcType);
                         return -1;
                 }
+                break;
             }
             default: {
                 xsink->raiseException("ODBC-BIND-ERROR", "do not know how to bind values of type '%s'",
@@ -3358,8 +3359,8 @@ SQLLEN* ODBCStatement::createIndArray(SQLLEN indicator, ExceptionSink* xsink) {
 
 #define ODBC_STR_BLOCK_SIZE 512
 QoreValue ODBCStatement::getColumnValue(int column, ODBCResultColumn& rcol, ExceptionSink* xsink) {
-    SQLLEN indicator;
-    SQLRETURN ret;
+    SQLLEN indicator = SQL_NULL_DATA;
+    SQLRETURN ret = SQL_ERROR;
 
     /*
     fprintf(stderr, "getColumnValue: row=%d, col=%d, dataType=%d\n", readRows, column, rcol.dataType);
