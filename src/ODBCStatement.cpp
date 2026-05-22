@@ -3446,86 +3446,47 @@ QoreValue ODBCStatement::getColumnValue(int column, ODBCResultColumn& rcol, Exce
         case SQL_WCHAR:
         case SQL_WVARCHAR:
         case SQL_WLONGVARCHAR: {
-            // retrieve data with SQL_C_CHAR
-            SQLWCHAR unused[1];
-            ret = SQLGetData(stmt, column, SQL_C_CHAR, unused, 0, &indicator); // Find out data size
-            if (ret == SQL_NO_DATA) {
-                // No data, therefore returning empty string
-                return new QoreStringNode;
-            }
-            if (SQL_SUCCEEDED(ret) && (indicator != SQL_NULL_DATA)) {
-                if (indicator == SQL_NO_TOTAL) {
-                    // we need to select the data piecewise
-                    SimpleRefHolder<QoreStringNode> str(new QoreStringNode("", getQoreEncoding()));
-                    size_t next_block = ODBC_STR_BLOCK_SIZE;
-                    while (true) {
-                        size_t size = str->capacity() - str->size();
-                        if (size < next_block) {
-                            str->reserve(str->capacity() + next_block);
-                            size = str->capacity() - str->size();
-                        }
-                        ret = SQLGetData(stmt, column, SQL_C_CHAR, (SQLPOINTER)(str->c_str() + str->size()), size,
-                            &indicator);
-                        if (!SQL_SUCCEEDED(ret) || (indicator == SQL_NULL_DATA)) {
-                            break;
-                        }
-                        size_t delta = strlen(str->c_str() + str->size());
-                        //printd(5, "got %d bytes (size: %d indicator: %d)\n", (int)delta, (int)str->size(),
-                        //    (int)indicator);
-                        if (delta) {
-                            str->terminate(str->size() + delta);
-                        }
-                        if (indicator > 0) {
-                            if (delta == (size_t)indicator) {
-                                str->trim_trailing(' ');
-                                return str.release();
-                            }
-                            next_block = indicator - str->size() + 1;
-                        }
-                        if (!delta) {
-                            xsink->raiseException("ODBC-DATA-ERROR", "cannot determine length of character data "
-                                "chunk received in row #%d column #%d", readRows, column);
-                            return QoreValue();
-                        }
-                    }
-                } else if (indicator < 0) {
-                    xsink->raiseException("ODBC-DATA-ERROR", "cannot retrieve character data in row #%d column #%d; "
-                        "the ODBC driver indicated invalid length %d for the column", readRows, column,
-                        (int)indicator);
-                    return QoreValue();
-                } else {
-                    SQLLEN buflen = indicator + 1; // Ending \0 char.
-                    //printd(5, "column has length %d bytes\n", (int)indicator);
-                    char* buf = static_cast<char*>(malloc(buflen));
-                    if (!buf) {
-                        xsink->raiseException("DBI:ODBC:MEMORY-ERROR",
-                            "could not allocate buffer of " QLLD " bytes for character data in row #%d column #%d",
-                            buflen, readRows, column);
-                        return QoreValue();
-                    }
-                    if (!indicator) {
-                        free(buf);
-                        return new QoreStringNode(getQoreEncoding());
-                    }
-                    ret = SQLGetData(stmt, column, SQL_C_CHAR, reinterpret_cast<SQLPOINTER>(buf), buflen,
-                        &indicator);
-                    if (SQL_SUCCEEDED(ret)) {
-                        // PostgreSQL-specific hack, needed because it returns BOOLEANs as VARCHAR values '0' & '1'
-                        if (buflen >= 2 && !buf[1] && (buf[0] == '0' || buf[0] == '1')) {
-                            char descTypeName[32];
-                            SQLColAttributeA(stmt, column, SQL_DESC_TYPE_NAME, descTypeName, 32, 0, 0);
-                            if (strcmp(descTypeName, "bool") == 0) {
-                                bool rv = (buf[0] != '0');
-                                free(buf);
-                                return rv;
-                            }
-                        }
+            SimpleRefHolder<QoreStringNode> str(new QoreStringNode("", getQoreEncoding()));
+            char buf[ODBC_STR_BLOCK_SIZE + 1];
 
-                        QoreStringNodeHolder rv(new QoreStringNode(buf, indicator, buflen, getQoreEncoding()));
-                        rv->trim_trailing(' ');
-                        return rv.release();
+            while (true) {
+                if (qore_check_cancel(xsink)) {
+                    return QoreValue();
+                }
+
+                memset(buf, 0, sizeof(buf));
+                ret = SQLGetData(stmt, column, SQL_C_CHAR, reinterpret_cast<SQLPOINTER>(buf), sizeof(buf),
+                    &indicator);
+                if (ret == SQL_NO_DATA) {
+                    str->trim_trailing(' ');
+                    return str.release();
+                }
+                if (!SQL_SUCCEEDED(ret) || indicator == SQL_NULL_DATA) {
+                    break;
+                }
+
+                size_t delta = strnlen(buf, sizeof(buf));
+                if (delta) {
+                    if (!str->size() && delta == 1 && (buf[0] == '0' || buf[0] == '1')) {
+                        // PostgreSQL-specific hack, needed because it returns BOOLEANs as VARCHAR values '0' & '1'
+                        char descTypeName[32];
+                        SQLColAttributeA(stmt, column, SQL_DESC_TYPE_NAME, descTypeName, 32, 0, 0);
+                        if (strcmp(descTypeName, "bool") == 0) {
+                            return buf[0] != '0';
+                        }
                     }
-                    free(buf);
+                    str->concat(buf, delta);
+                }
+
+                if (ret == SQL_SUCCESS) {
+                    str->trim_trailing(' ');
+                    return str.release();
+                }
+
+                if (!delta) {
+                    xsink->raiseException("ODBC-DATA-ERROR", "cannot determine length of character data chunk "
+                        "received in row #%d column #%d", readRows, column);
+                    return QoreValue();
                 }
             }
             break;

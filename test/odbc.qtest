@@ -216,7 +216,7 @@ class OdbcTest inherits QUnit::Test {
             "oraclob": {
                 "type": "CLOB",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
-                "expected": ("text", "lorem", "Prilis zlutoucky kun upel dabelske ody", "ipsum dolor"),
+                "expected": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
             },
             "oranclob": {
                 "type": "NCLOB",
@@ -231,21 +231,21 @@ class OdbcTest inherits QUnit::Test {
                 "type": "CHAR(60)",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
                 "expected": (
-                    "TEXT",
+                    "text",
                     "lorem",
-                    "Prilis zlutoucky kun upel dabelske ody",
+                    "Příliš žluťoučký kůň úpěl ďábelské ódy",
                     "ipsum dolor"
                 ),
             },
             "oravc": {
                 "type": "VARCHAR(128)",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
-                "expected": ("text", "lorem", "Prilis zlutoucky kun upel dabelske ody", "ipsum dolor"),
+                "expected": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
             },
             "oravc2": {
                 "type": "VARCHAR2(128)",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
-                "expected": ("text", "lorem", "Prilis zlutoucky kun upel dabelske ody", "ipsum dolor"),
+                "expected": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
             },
             "oranc": {
                 "type": "NCHAR(40)",
@@ -448,9 +448,9 @@ class OdbcTest inherits QUnit::Test {
         ds.open();
 
         if (m_options.verbose > 2) {
-            int serverVer = ds.getServerVersion();
+            auto serverVer = ds.getServerVersion();
             int clientVer = ds.getClientVersion();
-            printf("server version: %s (%d)\n", getVersionString(serverVer), serverVer);
+            printf("server version: %y\n", serverVer);
             printf("client version: %s (%d)\n", getVersionString(clientVer), clientVer);
         }
     }
@@ -517,6 +517,7 @@ class OdbcTest inherits QUnit::Test {
 
         if (oracleDB) {
             mysqlDB = False;
+            ds.setOption("bigint-string", True);
         }
         if (sybaseDB) {
             mssqlDB = False;
@@ -610,7 +611,7 @@ class OdbcTest inherits QUnit::Test {
 
                 if (oracle.getKey() == "oratstamp") {
                     for (int i = 0; i < Columns.oratstamp.values.size(); i++) {
-                        push Columns.oratstamp.expected, utcTz.date(Columns.oratstamp.values[i]);
+                        push Columns.oratstamp.expected, Columns.oratstamp.values[i];
                     }
                 }
             }
@@ -825,6 +826,9 @@ class OdbcTest inherits QUnit::Test {
         }
 
         Datasource tzDs(connStr);
+        if (oracleDB) {
+            tzDs.setOption("bigint-string", True);
+        }
         tzDs.setOption("qore-timezone", "Asia/Tokyo");
         tzDs.open();
 
@@ -935,7 +939,8 @@ class OdbcTest inherits QUnit::Test {
         stmt.exec();
         stmt.commit();
 
-        assertEq({"id": (7, 8, 9)}, ds.select("SELECT * FROM " + tableName + " ORDER BY id"));
+        assertEq({"id": oracleDB ? (7n, 8n, 9n) : (7, 8, 9)},
+            ds.select("SELECT * FROM " + tableName + " ORDER BY id"));
     }
 
     connectionInfoTest() {
@@ -1139,7 +1144,7 @@ class OdbcTest inherits QUnit::Test {
 
             assertTrue(stmt.next(), "next() should return True for first row");
             hash<auto> row = stmt.getValue();
-            assertEq(1, row.id ?? row.ID, "id should be 1");
+            assertEq(oracleDB ? 1n : 1, row.id ?? row.ID, "id should be 1");
             assertEq("Alice", trim(row.name ?? row.NAME), "name should be Alice");
         }
 
@@ -1200,7 +1205,7 @@ class OdbcTest inherits QUnit::Test {
         {
             hash<auto> row = ds.selectRow("SELECT * FROM " + tableName + " WHERE id = %v", 1);
             assertTrue(exists row, "selectRow should return a row");
-            assertEq(1, row.id ?? row.ID, "id should be 1");
+            assertEq(oracleDB ? 1n : 1, row.id ?? row.ID, "id should be 1");
         }
 
         # Test selectRow with multiple rows should throw
