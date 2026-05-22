@@ -376,6 +376,7 @@ class OdbcTest inherits QUnit::Test {
         bool mssqlDB = False;
         bool sybaseDB = False;
         bool firebirdDB = False;
+        bool sqliteDB = False;
 
         bool no_odbc;
     }
@@ -459,57 +460,60 @@ class OdbcTest inherits QUnit::Test {
         string typesTable = "odbc_types_test";
         try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
 
-        # Test if connected to a MySQL database.
-        try { # LINESTRING is a MySQL-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (ls LINESTRING)");
-            mysqlDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            mysqlDB = False;
-        }
+        sqliteDB = ds.getDriverRealName() == "SQLite";
+        if (!sqliteDB) {
+            # Test if connected to a MySQL database.
+            try { # LINESTRING is a MySQL-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (ls LINESTRING)");
+                mysqlDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                mysqlDB = False;
+            }
 
-        # Test if connected to a PostgreSQL database.
-        try { # BYTEA is a PostgreSQL-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (bt bytea)");
-            pgsqlDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            pgsqlDB = False;
-        }
+            # Test if connected to a PostgreSQL database.
+            try { # BYTEA is a PostgreSQL-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (bt bytea)");
+                pgsqlDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                pgsqlDB = False;
+            }
 
-        # Test if connected to an Oracle database.
-        try { # BINARY_FLOAT is an Oracle-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (bf BINARY_FLOAT)");
-            oracleDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            oracleDB = False;
-        }
+            # Test if connected to an Oracle database.
+            try { # BINARY_FLOAT is an Oracle-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (bf BINARY_FLOAT)");
+                oracleDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                oracleDB = False;
+            }
 
-        # Test if connected to a MSSQL database.
-        try { # IMAGE is a MSSQL-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (img IMAGE)");
-            mssqlDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            mssqlDB = False;
-        }
+            # Test if connected to a MSSQL database.
+            try { # IMAGE is a MSSQL-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (img IMAGE)");
+                mssqlDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                mssqlDB = False;
+            }
 
-        # Test if connected to a Sybase database.
-        try { # UNIQUEIDENTIFIERSTR is a Sybase-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (uis UNIQUEIDENTIFIERSTR)");
-            sybaseDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            sybaseDB = False;
-        }
+            # Test if connected to a Sybase database.
+            try { # UNIQUEIDENTIFIERSTR is a Sybase-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (uis UNIQUEIDENTIFIERSTR)");
+                sybaseDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                sybaseDB = False;
+            }
 
-        # Test if connected to Firebird
-        try {
-            ds.select("select rdb$relation_name as name from rdb$relations where rdb$relation_name = 'x'");
-            firebirdDB = True;
-        } catch (hash<ExceptionInfo> ex) {
-            firebirdDB = False;
+            # Test if connected to Firebird
+            try {
+                ds.select("select rdb$relation_name as name from rdb$relations where rdb$relation_name = 'x'");
+                firebirdDB = True;
+            } catch (hash<ExceptionInfo> ex) {
+                firebirdDB = False;
+            }
         }
 
         if (oracleDB) {
@@ -526,6 +530,12 @@ class OdbcTest inherits QUnit::Test {
             printf("MSSQL DB: %s\n", mssqlDB ? "True" : "False");
             printf("Sybase DB: %s\n", sybaseDB ? "True" : "False");
             printf("Firebird DB: %s\n", firebirdDB ? "True" : "False");
+            printf("SQLite DB: %s\n", sqliteDB ? "True" : "False");
+        }
+
+        if (sqliteDB) {
+            Columns.decim.expected = ("123.45", "0", "999.99", "-999.99");
+            Columns.num.expected = (-123.45, 0.0, 999.99, -999.99);
         }
 
         # Try additional MySQL types.
