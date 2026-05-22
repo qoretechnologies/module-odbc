@@ -511,7 +511,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
         ret = SQLExecute(stmt);
     }
 
-    if (!SQL_SUCCEEDED(ret)) { // error
+    if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
         char state[7];
         memset(state, 0, sizeof(state));
         ODBCErrorHelper::extractState(SQL_HANDLE_STMT, stmt, state);
@@ -581,7 +581,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
             } else {
                 ret = SQLExecute(stmt);
             }
-            if (!SQL_SUCCEEDED(ret)) { // error
+            if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
                 QoreStringMaker err("error in statement execution (sql: '%s', ret: %d)", str ? str : "n/a", (int)ret);
                 handleStmtError("ODBC-EXEC-ERROR", err.c_str(), xsink);
                 affectedRowCount = -1;
