@@ -228,7 +228,7 @@ class OdbcTest inherits QUnit::Test {
                 ),
             },
             "orac": {
-                "type": "CHAR(60)",
+                "type": "CHAR(128)",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
                 "expected": (
                     "text",
@@ -248,7 +248,7 @@ class OdbcTest inherits QUnit::Test {
                 "expected": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
             },
             "oranc": {
-                "type": "NCHAR(40)",
+                "type": "NCHAR(64)",
                 "values": (
                     convert_encoding("text", "UTF16"),
                     convert_encoding("lorem", "UTF16"),
@@ -405,6 +405,10 @@ class OdbcTest inherits QUnit::Test {
         if (!connStr) {
             no_odbc = True;
             return;
+        }
+
+        if (!ENV.NLS_LANG) {
+            setenv("NLS_LANG", "AMERICAN_AMERICA.AL32UTF8");
         }
 
         try {
@@ -668,6 +672,15 @@ class OdbcTest inherits QUnit::Test {
         }
     }
 
+    auto getColumn(ColumnarResult result, string name) {
+        string cname = result.columnNames().contains(name) ? name : name.upr();
+        return result.getColumn(cname);
+    }
+
+    list asList(auto value) {
+        return value.type() == Type::List ? value : value.toList();
+    }
+
     basicTest() {
         if (no_odbc) {
             testSkip("no ODBC driver present");
@@ -737,6 +750,16 @@ class OdbcTest inherits QUnit::Test {
         if (mssqlDB)
             trimListOfHashes(\ret);
         assertEq(results2, ret);
+
+        ColumnarResult columnar = ds.selectColumnar("SELECT id, txt FROM " + tableName + " ORDER BY id");
+        assertEq(3, columnar.numRows());
+        assertEq(2, columnar.numCols());
+        assertEq((1, 2, 3), map int($1), asList(getColumn(columnar, "id")));
+        assertEq(results1.txt, asList(getColumn(columnar, "txt")));
+
+        ColumnarResult empty = ds.selectColumnar("SELECT id, txt FROM " + tableName + " WHERE id < 0");
+        assertEq(0, empty.numRows());
+        assertEq(2, empty.numCols());
 
         {
             SQLStatement stmt = ds.getSQLStatement();
@@ -1172,6 +1195,23 @@ class OdbcTest inherits QUnit::Test {
             assertTrue(cols.hasKey("name") || cols.hasKey("NAME"), "result should have name column");
             auto idCol = cols.id ?? cols.ID;
             assertEq(3, idCol.size(), "id column should have 3 values");
+        }
+
+        # Test SQLStatement fetchColumnar
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("SELECT id, name FROM " + tableName + " ORDER BY id");
+            stmt.exec();
+            on_exit stmt.close();
+
+            ColumnarResult first = stmt.fetchColumnar(rows: 2);
+            ColumnarResult rest = stmt.fetchColumnar(rows: -1);
+            assertEq(2, first.numRows(), "first columnar fetch should honor row limit");
+            assertEq(1, rest.numRows(), "second columnar fetch should return remaining rows");
+            assertEq((1, 2), map int($1), asList(getColumn(first, "id")));
+            assertEq((3,), map int($1), asList(getColumn(rest, "id")));
+            assertEq(("Alice", "Bob"), map trim($1), asList(getColumn(first, "name")));
+            assertEq(("Charlie",), map trim($1), asList(getColumn(rest, "name")));
         }
 
         # Test SQLStatement describe
