@@ -341,17 +341,7 @@ static QoreColumnarResult* odbc_stmt_fetch_columnar(SQLStatement* stmt, int maxR
     odbc::ODBCPreparedStatement* ps = static_cast<odbc::ODBCPreparedStatement*>(stmt->getPrivateData());
     assert(ps);
 
-    ReferenceHolder<QoreHashNode> columns(ps->fetchColumns(maxRows, xsink), xsink);
-    if (*xsink || !columns) {
-        return nullptr;
-    }
-
-    ReferenceHolder<QoreHashNode> desc(ps->describe(xsink), xsink);
-    if (*xsink) {
-        return nullptr;
-    }
-
-    return QoreColumnarResult::fromColumnHash(*columns, *desc, xsink);
+    return ps->fetchColumnar(maxRows, xsink);
 }
 #endif
 

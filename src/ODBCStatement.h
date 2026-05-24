@@ -48,6 +48,8 @@
 #include "ParamArrayHolder.h"
 #include "ParamHolder.h"
 
+class QoreColumnarResult;
+
 namespace odbc {
 
 class ODBCConnection;
@@ -93,6 +95,16 @@ public:
         @return hash of result column lists
      */
     DLLLOCAL QoreHashNode* getOutputHash(ExceptionSink* xsink, bool emptyHashIfNothing, int maxRows = -1);
+
+#if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
+    //! Get result columns as a columnar result.
+    /** @param xsink exception sink
+        @param maxRows maximum count of rows to return; if <= 0 the count of returned rows is not limited
+
+        @return columnar result
+     */
+    DLLLOCAL QoreColumnarResult* getOutputColumnar(ExceptionSink* xsink, int maxRows = -1);
+#endif
 
     //! Get result list.
     /** @param xsink exception sink

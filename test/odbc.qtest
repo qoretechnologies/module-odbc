@@ -754,6 +754,7 @@ class OdbcTest inherits QUnit::Test {
         ColumnarResult columnar = ds.selectColumnar("SELECT id, txt FROM " + tableName + " ORDER BY id");
         assertEq(3, columnar.numRows());
         assertEq(2, columnar.numCols());
+        assertEq("buffer<int64>", getColumn(columnar, "id").fullType());
         assertEq((1, 2, 3), map int($1), asList(getColumn(columnar, "id")));
         assertEq(results1.txt, asList(getColumn(columnar, "txt")));
 
@@ -1208,6 +1209,8 @@ class OdbcTest inherits QUnit::Test {
             ColumnarResult rest = stmt.fetchColumnar(rows: -1);
             assertEq(2, first.numRows(), "first columnar fetch should honor row limit");
             assertEq(1, rest.numRows(), "second columnar fetch should return remaining rows");
+            assertEq("buffer<int64>", getColumn(first, "id").fullType());
+            assertEq("buffer<int64>", getColumn(rest, "id").fullType());
             assertEq((1, 2), map int($1), asList(getColumn(first, "id")));
             assertEq((3,), map int($1), asList(getColumn(rest, "id")));
             assertEq(("Alice", "Bob"), map trim($1), asList(getColumn(first, "name")));

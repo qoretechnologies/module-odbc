@@ -108,6 +108,12 @@ QoreHashNode* ODBCPreparedStatement::fetchColumns(int maxRows, ExceptionSink* xs
     return getOutputHash(xsink, true, maxRows);
 }
 
+#ifdef QDBI_METHOD_STMT_FETCH_COLUMNAR
+QoreColumnarResult* ODBCPreparedStatement::fetchColumnar(int maxRows, ExceptionSink* xsink) {
+    return getOutputColumnar(xsink, maxRows);
+}
+#endif
+
 bool ODBCPreparedStatement::next(ExceptionSink* xsink) {
     GetRowInternStatus status;
     outputRow = getRowIntern(status, xsink);

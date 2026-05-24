@@ -101,6 +101,16 @@ public:
      */
     DLLLOCAL QoreHashNode* fetchColumns(int maxRows, ExceptionSink* xsink);
 
+#ifdef QDBI_METHOD_STMT_FETCH_COLUMNAR
+    //! Get result columns as a columnar result.
+    /** @param xsink exception sink
+        @param rows maximum count of rows to return; if <= 0 the count of returned rows is not limited
+
+        @return columnar result
+     */
+    DLLLOCAL QoreColumnarResult* fetchColumnar(int maxRows, ExceptionSink* xsink);
+#endif
+
     //! Retrieve the next result-set row.
     /** @param xsink exception sink
 
@@ -124,4 +134,3 @@ private:
 } // namespace odbc
 
 #endif // _QORE_MODULE_ODBC_ODBCPREPAREDSTATEMENT_H
-

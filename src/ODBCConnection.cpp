@@ -258,17 +258,7 @@ QoreColumnarResult* ODBCConnection::selectColumnar(const QoreString* qstr, const
         return nullptr;
     }
 
-    ReferenceHolder<QoreHashNode> columns(res.getOutputHash(xsink, false), xsink);
-    if (*xsink || !columns) {
-        return nullptr;
-    }
-
-    ReferenceHolder<QoreHashNode> desc(res.describe(xsink), xsink);
-    if (*xsink) {
-        return nullptr;
-    }
-
-    return QoreColumnarResult::fromColumnHash(*columns, *desc, xsink);
+    return res.getOutputColumnar(xsink);
 }
 #endif
 
