@@ -865,7 +865,7 @@ class OdbcTest inherits QUnit::Test {
         tzDs.commit();
 
         on_error tzDs.rollback();
-        any ret = tzDs.exec("CREATE TABLE " + tableName + " (id int, t " + (mssqlDB ? "datetime)" : "timestamp)"));
+        auto ret = tzDs.exec("CREATE TABLE " + tableName + " (id int, t " + (mssqlDB ? "datetime)" : "timestamp)"));
         assertTrue(ret == 0 || ret == -1 || ret.typeCode() == NOTHING);
         tzDs.commit();
 
