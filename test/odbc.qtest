@@ -147,8 +147,7 @@ class OdbcTest inherits QUnit::Test {
             },
             "myyr": {
                 "type": "YEAR",
-                "values": (2016-01-11, 2012-01-11, 2016-01-30, 1970-01-11),
-                "expected": (2016-00-00, 2012-00-00, 2016-00-00, 1970-00-00),
+                "values": (2016, 2012, 2016, 1970),
             },
             "mytstamp": {
                 "type": "TIMESTAMP(3)",
@@ -217,7 +216,7 @@ class OdbcTest inherits QUnit::Test {
             "oraclob": {
                 "type": "CLOB",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
-                "expected": ("text", "lorem", "Prilis zlutoucky kun upel dabelske ody", "ipsum dolor"),
+                "expected": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
             },
             "oranclob": {
                 "type": "NCLOB",
@@ -229,27 +228,27 @@ class OdbcTest inherits QUnit::Test {
                 ),
             },
             "orac": {
-                "type": "CHAR(60)",
+                "type": "CHAR(128)",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
                 "expected": (
-                    "TEXT",
+                    "text",
                     "lorem",
-                    "Prilis zlutoucky kun upel dabelske ody",
+                    "Příliš žluťoučký kůň úpěl ďábelské ódy",
                     "ipsum dolor"
                 ),
             },
             "oravc": {
                 "type": "VARCHAR(128)",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
-                "expected": ("text", "lorem", "Prilis zlutoucky kun upel dabelske ody", "ipsum dolor"),
+                "expected": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
             },
             "oravc2": {
                 "type": "VARCHAR2(128)",
                 "values": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
-                "expected": ("text", "lorem", "Prilis zlutoucky kun upel dabelske ody", "ipsum dolor"),
+                "expected": ("text", "lorem", "Příliš žluťoučký kůň úpěl ďábelské ódy", "ipsum dolor"),
             },
             "oranc": {
-                "type": "NCHAR(40)",
+                "type": "NCHAR(64)",
                 "values": (
                     convert_encoding("text", "UTF16"),
                     convert_encoding("lorem", "UTF16"),
@@ -376,6 +375,7 @@ class OdbcTest inherits QUnit::Test {
         bool mssqlDB = False;
         bool sybaseDB = False;
         bool firebirdDB = False;
+        bool sqliteDB = False;
 
         bool no_odbc;
     }
@@ -405,6 +405,10 @@ class OdbcTest inherits QUnit::Test {
         if (!connStr) {
             no_odbc = True;
             return;
+        }
+
+        if (!ENV.NLS_LANG) {
+            setenv("NLS_LANG", "AMERICAN_AMERICA.AL32UTF8");
         }
 
         try {
@@ -448,9 +452,9 @@ class OdbcTest inherits QUnit::Test {
         ds.open();
 
         if (m_options.verbose > 2) {
-            int serverVer = ds.getServerVersion();
+            auto serverVer = ds.getServerVersion();
             int clientVer = ds.getClientVersion();
-            printf("server version: %s (%d)\n", getVersionString(serverVer), serverVer);
+            printf("server version: %y\n", serverVer);
             printf("client version: %s (%d)\n", getVersionString(clientVer), clientVer);
         }
     }
@@ -459,61 +463,65 @@ class OdbcTest inherits QUnit::Test {
         string typesTable = "odbc_types_test";
         try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
 
-        # Test if connected to a MySQL database.
-        try { # LINESTRING is a MySQL-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (ls LINESTRING)");
-            mysqlDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            mysqlDB = False;
-        }
+        sqliteDB = ds.getDriverRealName() == "SQLite";
+        if (!sqliteDB) {
+            # Test if connected to a MySQL database.
+            try { # LINESTRING is a MySQL-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (ls LINESTRING)");
+                mysqlDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                mysqlDB = False;
+            }
 
-        # Test if connected to a PostgreSQL database.
-        try { # BYTEA is a PostgreSQL-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (bt bytea)");
-            pgsqlDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            pgsqlDB = False;
-        }
+            # Test if connected to a PostgreSQL database.
+            try { # BYTEA is a PostgreSQL-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (bt bytea)");
+                pgsqlDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                pgsqlDB = False;
+            }
 
-        # Test if connected to an Oracle database.
-        try { # BINARY_FLOAT is an Oracle-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (bf BINARY_FLOAT)");
-            oracleDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            oracleDB = False;
-        }
+            # Test if connected to an Oracle database.
+            try { # BINARY_FLOAT is an Oracle-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (bf BINARY_FLOAT)");
+                oracleDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                oracleDB = False;
+            }
 
-        # Test if connected to a MSSQL database.
-        try { # IMAGE is a MSSQL-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (img IMAGE)");
-            mssqlDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            mssqlDB = False;
-        }
+            # Test if connected to a MSSQL database.
+            try { # IMAGE is a MSSQL-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (img IMAGE)");
+                mssqlDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                mssqlDB = False;
+            }
 
-        # Test if connected to a Sybase database.
-        try { # UNIQUEIDENTIFIERSTR is a Sybase-only datatype.
-            ds.exec("CREATE TABLE " + typesTable + " (uis UNIQUEIDENTIFIERSTR)");
-            sybaseDB = True;
-            try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
-        } catch (hash<ExceptionInfo> e) {
-            sybaseDB = False;
-        }
+            # Test if connected to a Sybase database.
+            try { # UNIQUEIDENTIFIERSTR is a Sybase-only datatype.
+                ds.exec("CREATE TABLE " + typesTable + " (uis UNIQUEIDENTIFIERSTR)");
+                sybaseDB = True;
+                try { ds.exec("DROP TABLE " + typesTable); } catch (hash<ExceptionInfo> e) {}
+            } catch (hash<ExceptionInfo> e) {
+                sybaseDB = False;
+            }
 
-        # Test if connected to Firebird
-        try {
-            ds.select("select rdb$relation_name as name from rdb$relations where rdb$relation_name = 'x'");
-            firebirdDB = True;
-        } catch (hash<ExceptionInfo> ex) {
-            firebirdDB = False;
+            # Test if connected to Firebird
+            try {
+                ds.select("select rdb$relation_name as name from rdb$relations where rdb$relation_name = 'x'");
+                firebirdDB = True;
+            } catch (hash<ExceptionInfo> ex) {
+                firebirdDB = False;
+            }
         }
 
         if (oracleDB) {
             mysqlDB = False;
+            ds.setOption("bigint-string", True);
         }
         if (sybaseDB) {
             mssqlDB = False;
@@ -526,10 +534,22 @@ class OdbcTest inherits QUnit::Test {
             printf("MSSQL DB: %s\n", mssqlDB ? "True" : "False");
             printf("Sybase DB: %s\n", sybaseDB ? "True" : "False");
             printf("Firebird DB: %s\n", firebirdDB ? "True" : "False");
+            printf("SQLite DB: %s\n", sqliteDB ? "True" : "False");
+        }
+
+        if (sqliteDB) {
+            Columns.decim.expected = ("123.45", "0", "999.99", "-999.99");
+            Columns.num.expected = (-123.45, 0.0, 999.99, -999.99);
         }
 
         # Try additional MySQL types.
         if (mysqlDB) {
+            Columns.fltp.expected = (1.72, 3.145679, 0.0, -2.721828);
+            Columns.r.expected = (0.003906, 0.007812, -0.007812, 0.0);
+            Columns.rodb.expected = (0.003906, 0.007812, -0.007812, 0.0);
+            Columns.flt.expected = (0.0039059999398887157, 0.0078119998797774315, -0.0078119998797774315, 0.0);
+            Columns.dbl.expected = (1.72, 3.145679, 0.0, -2.721828);
+
             string mysqlTable = "mysql_types_test";
             try { ds.exec("DROP TABLE " + mysqlTable); } catch (hash<ExceptionInfo> e) {}
             HashIterator mysql(MysqlColumns);
@@ -550,13 +570,9 @@ class OdbcTest inherits QUnit::Test {
                             exp += <00>;
                     }
                 } else if (mysql.getKey() == "mydtime") {
-                    for (int i = 0; i < Columns.mydtime.values.size(); i++) {
-                        push Columns.mydtime.expected, utcTz.date(Columns.mydtime.values[i]);
-                    }
+                    Columns.mydtime.expected = Columns.mydtime.values;
                 } else if (mysql.getKey() == "mytstamp") {
-                    for (int i = 0; i < Columns.mytstamp.values.size(); i++) {
-                        push Columns.mytstamp.expected, utcTz.date(Columns.mytstamp.values[i]);
-                    }
+                    Columns.mytstamp.expected = Columns.mytstamp.values;
                 }
             }
         }
@@ -599,7 +615,7 @@ class OdbcTest inherits QUnit::Test {
 
                 if (oracle.getKey() == "oratstamp") {
                     for (int i = 0; i < Columns.oratstamp.values.size(); i++) {
-                        push Columns.oratstamp.expected, utcTz.date(Columns.oratstamp.values[i]);
+                        push Columns.oratstamp.expected, Columns.oratstamp.values[i];
                     }
                 }
             }
@@ -656,6 +672,15 @@ class OdbcTest inherits QUnit::Test {
         }
     }
 
+    auto getColumn(ColumnarResult result, string name) {
+        string cname = result.columnNames().contains(name) ? name : name.upr();
+        return result.getColumn(cname);
+    }
+
+    list asList(auto value) {
+        return value.type() == Type::List ? value : value.toList();
+    }
+
     basicTest() {
         if (no_odbc) {
             testSkip("no ODBC driver present");
@@ -693,10 +718,22 @@ class OdbcTest inherits QUnit::Test {
         assertThrows("ODBC-BIND-ERROR", "hash parameter not in correct format for odbc_bind",
             sub() { ds.exec("INSERT INTO " + tableName + " (id, txt) VALUES (%v, %v)", 3, {}); });
 
+        assertEq(1, ds.exec("INSERT INTO " + tableName + " (id, txt) VALUES (%v, %v)", odbc_bind(ODBCT_SLONG, 3),
+            "scalar odbc_bind"));
+        ds.commit();
+
         assertThrows("ODBC-EXEC-ERROR", "error in statement execution", sub() { ds.exec("bla bla bla"); });
 
-        hash results1 = {"id": (1, 2), "txt": ("abcdef123456", "test 789 abc lorem ipsum"), "txt1": ("abc123", NULL)};
-        list results2 = ({"id": 1, "txt": "abcdef123456", "txt1": "abc123"}, {"id": 2, "txt": "test 789 abc lorem ipsum", "txt1": NULL});
+        hash results1 = {
+            "id": (1, 2, 3),
+            "txt": ("abcdef123456", "test 789 abc lorem ipsum", "scalar odbc_bind"),
+            "txt1": ("abc123", NULL, NULL),
+        };
+        list results2 = (
+            {"id": 1, "txt": "abcdef123456", "txt1": "abc123"},
+            {"id": 2, "txt": "test 789 abc lorem ipsum", "txt1": NULL},
+            {"id": 3, "txt": "scalar odbc_bind", "txt1": NULL},
+        );
 
         on_error ds.rollback();
         ret = ds.exec("SELECT * FROM " + tableName);
@@ -713,6 +750,17 @@ class OdbcTest inherits QUnit::Test {
         if (mssqlDB)
             trimListOfHashes(\ret);
         assertEq(results2, ret);
+
+        ColumnarResult columnar = ds.selectColumnar("SELECT id, txt FROM " + tableName + " ORDER BY id");
+        assertEq(3, columnar.numRows());
+        assertEq(2, columnar.numCols());
+        assertEq("buffer<int64>", getColumn(columnar, "id").fullType());
+        assertEq((1, 2, 3), map int($1), asList(getColumn(columnar, "id")));
+        assertEq(results1.txt, asList(getColumn(columnar, "txt")));
+
+        ColumnarResult empty = ds.selectColumnar("SELECT id, txt FROM " + tableName + " WHERE id < 0");
+        assertEq(0, empty.numRows());
+        assertEq(2, empty.numCols());
 
         {
             SQLStatement stmt = ds.getSQLStatement();
@@ -802,6 +850,9 @@ class OdbcTest inherits QUnit::Test {
         }
 
         Datasource tzDs(connStr);
+        if (oracleDB) {
+            tzDs.setOption("bigint-string", True);
+        }
         tzDs.setOption("qore-timezone", "Asia/Tokyo");
         tzDs.open();
 
@@ -814,7 +865,7 @@ class OdbcTest inherits QUnit::Test {
         tzDs.commit();
 
         on_error tzDs.rollback();
-        any ret = tzDs.exec("CREATE TABLE " + tableName + " (id int, t " + (mssqlDB ? "datetime)" : "timestamp)"));
+        auto ret = tzDs.exec("CREATE TABLE " + tableName + " (id int, t " + (mssqlDB ? "datetime)" : "timestamp)"));
         assertTrue(ret == 0 || ret == -1 || ret.typeCode() == NOTHING);
         tzDs.commit();
 
@@ -897,6 +948,23 @@ class OdbcTest inherits QUnit::Test {
             stmt.next();
             assertEq(row, stmt.getValue());
         }
+        stmt.close();
+
+        ds.exec("DROP TABLE " + tableName);
+        ds.commit();
+
+        ret = ds.exec("CREATE TABLE " + tableName + " (id int)");
+        assertTrue(ret == 0 || ret == -1 || ret.typeCode() == NOTHING);
+        ds.commit();
+
+        stmt = ds.getSQLStatement();
+        stmt.prepare("INSERT INTO " + tableName + " (id) VALUES (%v)");
+        stmt.bindArgs((odbc_bind(ODBCT_SLONG, (7, 8, 9)),));
+        stmt.exec();
+        stmt.commit();
+
+        assertEq({"id": oracleDB ? (7n, 8n, 9n) : (7, 8, 9)},
+            ds.select("SELECT * FROM " + tableName + " ORDER BY id"));
     }
 
     connectionInfoTest() {
@@ -1100,7 +1168,7 @@ class OdbcTest inherits QUnit::Test {
 
             assertTrue(stmt.next(), "next() should return True for first row");
             hash<auto> row = stmt.getValue();
-            assertEq(1, row.id ?? row.ID, "id should be 1");
+            assertEq(oracleDB ? 1n : 1, row.id ?? row.ID, "id should be 1");
             assertEq("Alice", trim(row.name ?? row.NAME), "name should be Alice");
         }
 
@@ -1128,6 +1196,25 @@ class OdbcTest inherits QUnit::Test {
             assertTrue(cols.hasKey("name") || cols.hasKey("NAME"), "result should have name column");
             auto idCol = cols.id ?? cols.ID;
             assertEq(3, idCol.size(), "id column should have 3 values");
+        }
+
+        # Test SQLStatement fetchColumnar
+        {
+            SQLStatement stmt = ds.getSQLStatement();
+            stmt.prepare("SELECT id, name FROM " + tableName + " ORDER BY id");
+            stmt.exec();
+            on_exit stmt.close();
+
+            ColumnarResult first = stmt.fetchColumnar(rows: 2);
+            ColumnarResult rest = stmt.fetchColumnar(rows: -1);
+            assertEq(2, first.numRows(), "first columnar fetch should honor row limit");
+            assertEq(1, rest.numRows(), "second columnar fetch should return remaining rows");
+            assertEq("buffer<int64>", getColumn(first, "id").fullType());
+            assertEq("buffer<int64>", getColumn(rest, "id").fullType());
+            assertEq((1, 2), map int($1), asList(getColumn(first, "id")));
+            assertEq((3,), map int($1), asList(getColumn(rest, "id")));
+            assertEq(("Alice", "Bob"), map trim($1), asList(getColumn(first, "name")));
+            assertEq(("Charlie",), map trim($1), asList(getColumn(rest, "name")));
         }
 
         # Test SQLStatement describe
@@ -1161,7 +1248,7 @@ class OdbcTest inherits QUnit::Test {
         {
             hash<auto> row = ds.selectRow("SELECT * FROM " + tableName + " WHERE id = %v", 1);
             assertTrue(exists row, "selectRow should return a row");
-            assertEq(1, row.id ?? row.ID, "id should be 1");
+            assertEq(oracleDB ? 1n : 1, row.id ?? row.ID, "id should be 1");
         }
 
         # Test selectRow with multiple rows should throw

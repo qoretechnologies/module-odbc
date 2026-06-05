@@ -27,6 +27,10 @@
 
 #include "ODBCConnection.h"
 
+#if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
+#include <qore/QoreColumnarResult.h>
+#endif
+
 #include "qore/QoreLib.h"
 #include "qore/DBI.h"
 
@@ -206,6 +210,58 @@ QoreValue ODBCConnection::select(const QoreString* qstr, const QoreListNode* arg
     return res.rowsAffected();
 }
 
+#ifdef QDBI_METHOD_SELECT_TYPED
+QoreValue ODBCConnection::selectTyped(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
+    ODBCStatement res(this, xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    if (res.exec(qstr, args, xsink)) {
+        return QoreValue();
+    }
+
+    if (!res.hasResultData()) {
+        return res.rowsAffected();
+    }
+
+    ReferenceHolder<QoreHashNode> columns(res.getOutputHash(xsink, false), xsink);
+    if (*xsink || !columns) {
+        return QoreValue();
+    }
+
+    ReferenceHolder<QoreHashNode> desc(res.describe(xsink), xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    QoreHashNode* rv = qore_dbi_make_typed_select_result(ds, *columns, *desc, xsink);
+    return rv ? QoreValue(rv) : QoreValue();
+}
+#endif
+
+#ifdef QDBI_METHOD_SELECT_COLUMNAR
+QoreColumnarResult* ODBCConnection::selectColumnar(const QoreString* qstr, const QoreListNode* args,
+        ExceptionSink* xsink) {
+    ODBCStatement res(this, xsink);
+    if (*xsink) {
+        return nullptr;
+    }
+
+    if (res.exec(qstr, args, xsink)) {
+        return nullptr;
+    }
+
+    if (!res.hasResultData()) {
+        xsink->raiseException("COLUMNAR-RESULT-ERROR",
+            "Datasource::selectColumnar() requires an SQL statement returning result columns");
+        return nullptr;
+    }
+
+    return res.getOutputColumnar(xsink);
+}
+#endif
+
 QoreListNode* ODBCConnection::selectRows(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
     ODBCStatement res(this, xsink);
     if (*xsink)
@@ -216,6 +272,32 @@ QoreListNode* ODBCConnection::selectRows(const QoreString* qstr, const QoreListN
 
     return res.getOutputList(xsink);
 }
+
+#ifdef QDBI_METHOD_SELECT_TYPED
+QoreValue ODBCConnection::selectRowsTyped(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
+    ODBCStatement res(this, xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    if (res.exec(qstr, args, xsink)) {
+        return QoreValue();
+    }
+
+    ReferenceHolder<QoreListNode> rows(res.getOutputList(xsink), xsink);
+    if (*xsink || !rows) {
+        return QoreValue();
+    }
+
+    ReferenceHolder<QoreHashNode> desc(res.describe(xsink), xsink);
+    if (*xsink) {
+        return QoreValue();
+    }
+
+    QoreListNode* rv = qore_dbi_make_typed_select_rows_result(ds, *rows, *desc, xsink);
+    return rv ? QoreValue(rv) : QoreValue();
+}
+#endif
 
 QoreHashNode* ODBCConnection::selectRow(const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
     ODBCStatement res(this, xsink);

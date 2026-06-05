@@ -27,7 +27,13 @@
 
 #include "ODBCStatement.h"
 
+#include <cctype>
 #include <climits>
+
+#if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
+#include <qore/QoreBufferNode.h>
+#include <qore/QoreColumnarResult.h>
+#endif
 
 #include "qore/QoreLib.h"
 #include "qore/DBI.h"
@@ -36,6 +42,403 @@
 #include "ODBCConnection.h"
 
 namespace odbc {
+
+#if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
+namespace {
+struct ODBCColumnarStorage {
+    std::vector<int64> int_values;
+    std::vector<double> float_values;
+    std::vector<QoreBufferDecimal128> decimal_values;
+    std::vector<uint8_t> validity;
+};
+
+static size_t odbc_columnar_bitmap_size(size_t size) {
+    return (size + 7) / 8;
+}
+
+static void odbc_columnar_set_validity_bit(std::vector<uint8_t>& validity, size_t index, bool valid) {
+    size_t byte = index / 8;
+    if (byte >= validity.size()) {
+        validity.resize(byte + 1, 0);
+    }
+
+    uint8_t mask = uint8_t(1) << (index % 8);
+    if (valid) {
+        validity[byte] |= mask;
+    } else {
+        validity[byte] &= ~mask;
+    }
+}
+
+static bool odbc_columnar_decimal_metadata_supported(const ODBCResultColumn& col) {
+    return col.colSize > 0 && col.colSize <= 38 && col.decimalDigits >= 0
+        && static_cast<SQLULEN>(col.decimalDigits) <= col.colSize;
+}
+
+static __int128 odbc_columnar_decimal_abs(__int128 value) {
+    return value < 0 ? -value : value;
+}
+
+static __int128 odbc_columnar_decimal_pow10(int32_t exponent) {
+    __int128 rv = 1;
+    for (int32_t i = 0; i < exponent; ++i) {
+        rv *= 10;
+    }
+    return rv;
+}
+
+static int32_t odbc_columnar_decimal_precision(__int128 value) {
+    value = odbc_columnar_decimal_abs(value);
+    int32_t rv = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++rv;
+    }
+    return rv;
+}
+
+static QoreBufferDecimal128 odbc_columnar_decimal_storage(__int128 value) {
+    unsigned __int128 bits = static_cast<unsigned __int128>(value);
+    return QoreBufferDecimal128{static_cast<uint64_t>(bits), static_cast<int64_t>(bits >> 64)};
+}
+
+static bool odbc_columnar_parse_int64(const char* input, int64& value) {
+    if (!input || !*input || strchr(input, '.') || strchr(input, 'e') || strchr(input, 'E')) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = nullptr;
+    long long rv = strtoll(input, &end, 10);
+    if (errno == ERANGE || !end || *end) {
+        return false;
+    }
+
+    value = static_cast<int64>(rv);
+    return true;
+}
+
+static int odbc_columnar_parse_decimal128(const char* input, int32_t target_precision, int32_t target_scale,
+        const char* column_name, QoreBufferDecimal128& out, ExceptionSink* xsink) {
+    assert(target_precision > 0 && target_precision <= 38 && target_scale >= 0 && target_scale <= target_precision);
+    if (!input) {
+        xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+            "cannot convert DECIMAL(%d,%d) column '%s' to decimal128; value is not available",
+            target_precision, target_scale, column_name);
+        return -1;
+    }
+
+    size_t begin = 0;
+    size_t input_size = strlen(input);
+    while (begin < input_size && std::isspace(static_cast<unsigned char>(input[begin]))) {
+        ++begin;
+    }
+
+    size_t end = input_size;
+    while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1]))) {
+        --end;
+    }
+    if (begin == end) {
+        xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+            "cannot convert DECIMAL(%d,%d) column '%s' empty value to decimal128",
+            target_precision, target_scale, column_name);
+        return -1;
+    }
+
+    bool negative = false;
+    size_t pos = begin;
+    if (input[pos] == '+' || input[pos] == '-') {
+        negative = input[pos] == '-';
+        ++pos;
+    }
+
+    bool seen_digit = false;
+    bool seen_dot = false;
+    int64_t fractional_digits = 0;
+    std::string digits;
+    for (; pos < end; ++pos) {
+        unsigned char c = static_cast<unsigned char>(input[pos]);
+        if (std::isdigit(c)) {
+            seen_digit = true;
+            digits.push_back(static_cast<char>(c));
+            if (seen_dot) {
+                ++fractional_digits;
+            }
+            continue;
+        }
+        if (input[pos] == '.' && !seen_dot) {
+            seen_dot = true;
+            continue;
+        }
+        break;
+    }
+
+    if (!seen_digit) {
+        xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+            "cannot convert DECIMAL(%d,%d) column '%s' value '%s' to decimal128; expected at least one digit",
+            target_precision, target_scale, column_name, input);
+        return -1;
+    }
+
+    int64_t exponent = 0;
+    if (pos < end && (input[pos] == 'e' || input[pos] == 'E')) {
+        ++pos;
+        bool exponent_negative = false;
+        if (pos < end && (input[pos] == '+' || input[pos] == '-')) {
+            exponent_negative = input[pos] == '-';
+            ++pos;
+        }
+        if (pos == end || !std::isdigit(static_cast<unsigned char>(input[pos]))) {
+            xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+                "cannot convert DECIMAL(%d,%d) column '%s' value '%s' to decimal128; invalid exponent",
+                target_precision, target_scale, column_name, input);
+            return -1;
+        }
+        while (pos < end && std::isdigit(static_cast<unsigned char>(input[pos]))) {
+            exponent = (exponent * 10) + (input[pos] - '0');
+            if (exponent > 76) {
+                xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+                    "cannot convert DECIMAL(%d,%d) column '%s' value '%s' to decimal128; exponent is too large",
+                    target_precision, target_scale, column_name, input);
+                return -1;
+            }
+            ++pos;
+        }
+        if (exponent_negative) {
+            exponent = -exponent;
+        }
+    }
+
+    if (pos != end) {
+        xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+            "cannot convert DECIMAL(%d,%d) column '%s' value '%s' to decimal128; unexpected character '%c'",
+            target_precision, target_scale, column_name, input, input[pos]);
+        return -1;
+    }
+
+    int64_t source_scale = fractional_digits - exponent;
+    if (source_scale < 0) {
+        digits.append(static_cast<size_t>(-source_scale), '0');
+        source_scale = 0;
+    }
+
+    size_t first_non_zero = digits.find_first_not_of('0');
+    if (first_non_zero == std::string::npos) {
+        out = odbc_columnar_decimal_storage(0);
+        return 0;
+    }
+
+    size_t significant_digits = digits.size() - first_non_zero;
+    if (significant_digits > 38) {
+        xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+            "cannot convert DECIMAL(%d,%d) column '%s' value '%s' to decimal128; precision %zu"
+            " exceeds decimal128 maximum precision 38", target_precision, target_scale, column_name, input,
+            significant_digits);
+        return -1;
+    }
+
+    __int128 unscaled = 0;
+    for (size_t i = first_non_zero; i < digits.size(); ++i) {
+        unscaled = (unscaled * 10) + (digits[i] - '0');
+    }
+    if (negative) {
+        unscaled = -unscaled;
+    }
+
+    if (source_scale < target_scale) {
+        unscaled *= odbc_columnar_decimal_pow10(static_cast<int32_t>(target_scale - source_scale));
+    } else if (source_scale > target_scale) {
+        __int128 divisor = odbc_columnar_decimal_pow10(static_cast<int32_t>(source_scale - target_scale));
+        if (unscaled % divisor) {
+            xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+                "cannot convert DECIMAL(%d,%d) column '%s' value '%s' to decimal128 without losing precision",
+                target_precision, target_scale, column_name, input);
+            return -1;
+        }
+        unscaled /= divisor;
+    }
+
+    if (odbc_columnar_decimal_precision(unscaled) > target_precision) {
+        xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+            "cannot convert DECIMAL(%d,%d) column '%s' value '%s' to decimal128; value exceeds declared precision",
+            target_precision, target_scale, column_name, input);
+        return -1;
+    }
+
+    out = odbc_columnar_decimal_storage(unscaled);
+    return 0;
+}
+
+enum class ODBCColumnarKind {
+    Int64,
+    Float64,
+    Decimal128,
+    List,
+};
+
+class ODBCColumnarBuilder {
+public:
+    ODBCColumnarBuilder(const ODBCResultColumn& col, const ODBCOptions& options, ExceptionSink* xsink)
+        : name(col.name), list(xsink) {
+        switch (col.dataType) {
+            case SQL_INTEGER:
+            case SQL_BIGINT:
+            case SQL_SMALLINT:
+            case SQL_TINYINT:
+                kind = ODBCColumnarKind::Int64;
+                storage.reset(new ODBCColumnarStorage);
+                break;
+
+            case SQL_FLOAT:
+            case SQL_DOUBLE:
+            case SQL_REAL:
+                kind = ODBCColumnarKind::Float64;
+                storage.reset(new ODBCColumnarStorage);
+                break;
+
+            case SQL_DECIMAL:
+            case SQL_NUMERIC:
+                if (options.numeric != ENO_STRING && odbc_columnar_decimal_metadata_supported(col)) {
+                    precision = static_cast<int32_t>(col.colSize);
+                    scale = static_cast<int32_t>(col.decimalDigits);
+                    kind = options.numeric == ENO_OPTIMAL && !scale && precision <= 18
+                        ? ODBCColumnarKind::Int64
+                        : ODBCColumnarKind::Decimal128;
+                    storage.reset(new ODBCColumnarStorage);
+                    break;
+                }
+                // fall through
+
+            default:
+                kind = ODBCColumnarKind::List;
+                list = new QoreListNode(autoTypeInfo);
+                break;
+        }
+    }
+
+    const char* getName() const {
+        return name.c_str();
+    }
+
+    ODBCColumnarKind getKind() const {
+        return kind;
+    }
+
+    int appendNull() {
+        ensureValidity();
+        odbc_columnar_set_validity_bit(storage->validity, row_count, false);
+        switch (kind) {
+            case ODBCColumnarKind::Float64:
+                storage->float_values.push_back(0.0);
+                break;
+            case ODBCColumnarKind::Decimal128:
+                storage->decimal_values.push_back(QoreBufferDecimal128{0, 0});
+                break;
+            default:
+                storage->int_values.push_back(0);
+                break;
+        }
+        ++null_count;
+        ++row_count;
+        return 0;
+    }
+
+    int appendInt64(int64 value) {
+        storage->int_values.push_back(value);
+        appendValid();
+        return 0;
+    }
+
+    int appendFloat64(double value) {
+        storage->float_values.push_back(value);
+        appendValid();
+        return 0;
+    }
+
+    int appendDecimal128(const char* value, ExceptionSink* xsink) {
+        QoreBufferDecimal128 decimal;
+        if (odbc_columnar_parse_decimal128(value, precision, scale, name.c_str(), decimal, xsink)) {
+            return -1;
+        }
+        storage->decimal_values.push_back(decimal);
+        appendValid();
+        return 0;
+    }
+
+    int appendList(QoreValue value, ExceptionSink* xsink) {
+        assert(kind == ODBCColumnarKind::List);
+        ValueHolder holder(value, xsink);
+        if (*xsink) {
+            return -1;
+        }
+        list->push(holder.release(), xsink);
+        if (*xsink) {
+            return -1;
+        }
+        ++row_count;
+        return 0;
+    }
+
+    QoreValue finish(ExceptionSink* xsink) {
+        if (kind == ODBCColumnarKind::List) {
+            return list.release();
+        }
+
+        QoreBufferElementType element_type = kind == ODBCColumnarKind::Float64
+            ? QoreBufferElementType::Float64
+            : (kind == ODBCColumnarKind::Decimal128 ? QoreBufferElementType::Decimal128
+                : QoreBufferElementType::Int64);
+        const void* data;
+        switch (element_type) {
+            case QoreBufferElementType::Float64:
+                data = storage->float_values.empty() ? nullptr : storage->float_values.data();
+                break;
+            case QoreBufferElementType::Decimal128:
+                data = storage->decimal_values.empty() ? nullptr : storage->decimal_values.data();
+                break;
+            default:
+                data = storage->int_values.empty() ? nullptr : storage->int_values.data();
+                break;
+        }
+
+        bool nullable = null_count > 0;
+        const uint8_t* validity = nullable && !storage->validity.empty() ? storage->validity.data() : nullptr;
+        if (element_type == QoreBufferElementType::Decimal128) {
+            return QoreBufferNode::wrapExternalStorage(element_type, nullable, row_count, data, validity, storage,
+                null_count, precision, scale, xsink);
+        }
+        return QoreBufferNode::wrapExternalStorage(element_type, nullable, row_count, data, validity, storage,
+            null_count, xsink);
+    }
+
+private:
+    void ensureValidity() {
+        if (!storage->validity.empty()) {
+            storage->validity.resize(odbc_columnar_bitmap_size(row_count + 1), 0);
+            return;
+        }
+
+        storage->validity.resize(odbc_columnar_bitmap_size(row_count + 1), 0xff);
+    }
+
+    void appendValid() {
+        if (!storage->validity.empty()) {
+            odbc_columnar_set_validity_bit(storage->validity, row_count, true);
+        }
+        ++row_count;
+    }
+
+    std::string name;
+    ODBCColumnarKind kind = ODBCColumnarKind::List;
+    std::shared_ptr<ODBCColumnarStorage> storage;
+    ReferenceHolder<QoreListNode> list;
+    size_t row_count = 0;
+    int64_t null_count = 0;
+    int32_t precision = 0;
+    int32_t scale = 0;
+};
+}
+#endif
 
 /////////////////////////////
 //     Public methods     //
@@ -90,6 +493,9 @@ QoreHashNode* ODBCStatement::describe(ExceptionSink* xsink) {
     QoreString typestr("type");
     QoreString dbtypestr("native_type");
     QoreString internalstr("internal_id");
+    QoreString nullablestr("nullable");
+    QoreString precisionstr("precision");
+    QoreString scalestr("scale");
     int columnCount = resColumns.size();
 
     // Assign unique column names.
@@ -102,6 +508,7 @@ QoreHashNode* ODBCStatement::describe(ExceptionSink* xsink) {
         desc->setKeyValue(namestr, new QoreStringNode(col.name), xsink);
         desc->setKeyValue(internalstr, (int64)col.dataType, xsink);
         desc->setKeyValue(maxsizestr, (int64)col.byteSize, xsink);
+        desc->setKeyValue(nullablestr, col.nullable != SQL_NO_NULLS, xsink);
 
         switch (col.dataType) {
             // Integer types.
@@ -184,10 +591,14 @@ QoreHashNode* ODBCStatement::describe(ExceptionSink* xsink) {
             case SQL_NUMERIC:
                 desc->setKeyValue(typestr, NT_NUMBER, xsink);
                 desc->setKeyValue(dbtypestr, new QoreStringNode("SQL_NUMERIC"), xsink);
+                desc->setKeyValue(precisionstr, (int64)col.colSize, xsink);
+                desc->setKeyValue(scalestr, (int64)col.decimalDigits, xsink);
                 break;
             case SQL_DECIMAL:
                 desc->setKeyValue(typestr, NT_NUMBER, xsink);
                 desc->setKeyValue(dbtypestr, new QoreStringNode("SQL_DECIMAL"), xsink);
+                desc->setKeyValue(precisionstr, (int64)col.colSize, xsink);
+                desc->setKeyValue(scalestr, (int64)col.decimalDigits, xsink);
                 break;
 
             // Time types.
@@ -342,6 +753,164 @@ QoreHashNode* ODBCStatement::getOutputHash(ExceptionSink* xsink, bool emptyHashI
 
     return h.release();
 }
+
+#if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
+QoreColumnarResult* ODBCStatement::getOutputColumnar(ExceptionSink* xsink, int maxRows) {
+    if (fetchResultColumnMetadata(xsink)) {
+        return nullptr;
+    }
+
+    std::vector<std::unique_ptr<ODBCColumnarBuilder>> builders;
+    builders.reserve(resColumns.size());
+    for (size_t i = 0; i < resColumns.size(); ++i) {
+        if (i && !(i % 100) && qore_check_cancel(xsink, "initializing ODBC columnar result")) {
+            return nullptr;
+        }
+        builders.emplace_back(new ODBCColumnarBuilder(resColumns[i], options, xsink));
+    }
+
+    int rowCount = 0;
+    while (true) {
+        if ((rowCount % 100) == 0 && qore_check_cancel(xsink)) {
+            return nullptr;
+        }
+
+        SQLRETURN ret = SQLFetch(stmt);
+        if (ret == SQL_NO_DATA) {
+            break;
+        }
+        if (!SQL_SUCCEEDED(ret)) {
+            std::string s("error occured when fetching row #%d");
+            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
+            xsink->raiseException("ODBC-FETCH-ERROR", s.c_str(), readRows);
+            return nullptr;
+        }
+
+        for (size_t j = 0; j < resColumns.size(); ++j) {
+            if (j && !(j % 100) && qore_check_cancel(xsink, "fetching ODBC columnar row")) {
+                return nullptr;
+            }
+
+            ODBCResultColumn& rcol = resColumns[j];
+            ODBCColumnarBuilder& builder = *builders[j];
+            int column = static_cast<int>(j + 1);
+            if (builder.getKind() == ODBCColumnarKind::List) {
+                if (builder.appendList(getColumnValue(column, rcol, xsink), xsink)) {
+                    return nullptr;
+                }
+                continue;
+            }
+
+            SQLLEN indicator = SQL_NULL_DATA;
+            ret = SQL_ERROR;
+            switch (rcol.dataType) {
+                case SQL_INTEGER:
+                case SQL_BIGINT: {
+                    SQLBIGINT val;
+                    ret = SQLGetData(stmt, column, SQL_C_SBIGINT, &val, sizeof(SQLBIGINT), &indicator);
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        builder.appendInt64(val);
+                    }
+                    break;
+                }
+                case SQL_SMALLINT: {
+                    SQLINTEGER val;
+                    ret = SQLGetData(stmt, column, SQL_C_SLONG, &val, sizeof(SQLINTEGER), &indicator);
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        builder.appendInt64(static_cast<int64>(val));
+                    }
+                    break;
+                }
+                case SQL_TINYINT: {
+                    SQLSMALLINT val;
+                    ret = SQLGetData(stmt, column, SQL_C_SSHORT, &val, sizeof(SQLSMALLINT), &indicator);
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        builder.appendInt64(static_cast<int64>(val));
+                    }
+                    break;
+                }
+                case SQL_FLOAT:
+                case SQL_DOUBLE: {
+                    SQLDOUBLE val;
+                    ret = SQLGetData(stmt, column, SQL_C_DOUBLE, &val, sizeof(SQLDOUBLE), &indicator);
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        builder.appendFloat64(val);
+                    }
+                    break;
+                }
+                case SQL_REAL: {
+                    SQLREAL val;
+                    ret = SQLGetData(stmt, column, SQL_C_FLOAT, &val, sizeof(SQLREAL), &indicator);
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        builder.appendFloat64(val);
+                    }
+                    break;
+                }
+                case SQL_DECIMAL:
+                case SQL_NUMERIC: {
+                    char val[128];
+                    memset(val, 0, sizeof(val));
+                    ret = SQLGetData(stmt, column, SQL_C_CHAR, val, sizeof(val), &indicator);
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        if (builder.getKind() == ODBCColumnarKind::Int64) {
+                            int64 int_value;
+                            if (!odbc_columnar_parse_int64(val, int_value)) {
+                                xsink->raiseException("ODBC-COLUMNAR-DECIMAL-ERROR",
+                                    "cannot convert DECIMAL column '%s' value '%s' to int64 without losing precision",
+                                    builder.getName(), val);
+                                return nullptr;
+                            }
+                            builder.appendInt64(int_value);
+                        } else if (builder.appendDecimal128(val, xsink)) {
+                            return nullptr;
+                        }
+                    }
+                    break;
+                }
+                default:
+                    assert(false);
+                    break;
+            }
+
+            if (!SQL_SUCCEEDED(ret)) {
+                std::string s("error occured when getting value of row #%d column #%d");
+                ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
+                xsink->raiseException("DBI:ODBC:RESULT-ERROR", s.c_str(), readRows, column);
+                return nullptr;
+            }
+
+            if (indicator == SQL_NULL_DATA && builder.appendNull()) {
+                return nullptr;
+            }
+        }
+
+        readRows++;
+        rowCount++;
+        if (rowCount == maxRows && maxRows > 0) {
+            break;
+        }
+    }
+
+    ReferenceHolder<QoreHashNode> columns(new QoreHashNode(autoTypeInfo), xsink);
+    for (size_t i = 0; i < builders.size(); ++i) {
+        if (i && !(i % 100) && qore_check_cancel(xsink, "finalizing ODBC columnar result")) {
+            return nullptr;
+        }
+        HashColumnAssignmentHelper hah(**columns, builders[i]->getName());
+        hah.assign(builders[i]->finish(xsink), xsink);
+        if (*xsink) {
+            return nullptr;
+        }
+    }
+
+    ReferenceHolder<QoreHashNode> desc(describe(xsink), xsink);
+    if (*xsink) {
+        return nullptr;
+    }
+
+    return QoreColumnarResult::fromColumnHash(*columns, *desc, xsink);
+}
+#endif
 
 QoreListNode* ODBCStatement::getOutputList(ExceptionSink* xsink, int maxRows) {
     if (fetchResultColumnMetadata(xsink))
@@ -511,7 +1080,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
         ret = SQLExecute(stmt);
     }
 
-    if (!SQL_SUCCEEDED(ret)) { // error
+    if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
         char state[7];
         memset(state, 0, sizeof(state));
         ODBCErrorHelper::extractState(SQL_HANDLE_STMT, stmt, state);
@@ -581,7 +1150,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
             } else {
                 ret = SQLExecute(stmt);
             }
-            if (!SQL_SUCCEEDED(ret)) { // error
+            if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
                 QoreStringMaker err("error in statement execution (sql: '%s', ret: %d)", str ? str : "n/a", (int)ret);
                 handleStmtError("ODBC-EXEC-ERROR", err.c_str(), xsink);
                 affectedRowCount = -1;
@@ -596,7 +1165,7 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
     }
 
     // Get count of affected rows.
-    SQLLEN len;
+    SQLLEN len = -1;
     ret = SQLRowCount(stmt, &len);
     if (SQL_SUCCEEDED(ret)) {
         affectedRowCount = len;
@@ -776,8 +1345,17 @@ size_t ODBCStatement::findArraySizeOfArgs(const QoreListNode* args) const {
     for (unsigned int i = 0; i < count; i++) {
         QoreValue arg = args->retrieveEntry(i);
         qore_type_t ntype = arg.getType();
-        if (ntype == NT_LIST)
+        if (ntype == NT_LIST) {
             return arg.get<const QoreListNode>()->size();
+        }
+        if (ntype == NT_HASH) {
+            const QoreHashNode* h = arg.get<const QoreHashNode>();
+            QoreValue odbct = h->getKeyValue("^odbct^");
+            QoreValue value = h->getKeyValue("^value^");
+            if (odbct.getType() == NT_INT && value.getType() == NT_LIST) {
+                return value.get<const QoreListNode>()->size();
+            }
+        }
     }
     return 0;
 }
@@ -991,6 +1569,7 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
                             QLLD, odbcType);
                         return -1;
                 }
+                break;
             }
             default: {
                 xsink->raiseException("ODBC-BIND-ERROR", "do not know how to bind values of type '%s'",
@@ -1519,8 +2098,9 @@ int ODBCStatement::bindTypeULong(int column, QoreValue arg, SQLRETURN& ret, Exce
         return -1;
     }
     int64 n = arg.getAsBigInt();
-    if (n < 0 || n > static_cast<int64>(ULONG_MAX)) {
-        xsink->raiseException("ODBC-BIND-ERROR", "integer value %ld does not fit the limits of ODBCT_ULONG odbc_bind",
+    if (n < 0 || n > static_cast<int64>(UINT_MAX)) {
+        xsink->raiseException("ODBC-BIND-ERROR", "integer value " QLLD " does not fit the limits of ODBCT_ULONG "
+            "odbc_bind",
             n);
         return -1;
     }
@@ -1565,7 +2145,7 @@ int ODBCStatement::bindTypeUShort(int column, QoreValue arg, SQLRETURN& ret, Exc
 
     uint16_t* ival = paramHolder.addUint16(static_cast<uint16_t>(n));
     ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
-        SQL_SMALLINT, SMALLINT_COLSIZE, 0, ival, sizeof(uint16_t), 0);
+        SQL_INTEGER, INTEGER_COLSIZE, 0, ival, sizeof(uint16_t), 0);
     return 0;
 }
 
@@ -1601,9 +2181,9 @@ int ODBCStatement::bindTypeUTinyint(int column, QoreValue arg, SQLRETURN& ret, E
         return -1;
     }
 
-    uint8_t* ival = paramHolder.addUint8(static_cast<uint8_t>(n));
-    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_UTINYINT,
-        SQL_TINYINT, TINYINT_COLSIZE, 0, ival, sizeof(uint8_t), 0);
+    uint16_t* ival = paramHolder.addUint16(static_cast<uint16_t>(n));
+    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
+        SQL_INTEGER, INTEGER_COLSIZE, 0, ival, sizeof(uint16_t), 0);
     return 0;
 }
 
@@ -1983,7 +2563,7 @@ int ODBCStatement::bindTypeULongArray(int column, QoreValue arg, SQLRETURN& ret,
         }
         for (size_t i = 0; i < arraySize; i++) {
             int64 n = lst->retrieveEntry(i).getAsBigInt();
-            if (n < 0 || n > static_cast<int64>(ULONG_MAX)) {
+            if (n < 0 || n > static_cast<int64>(UINT_MAX)) {
                 xsink->raiseException("ODBC-BIND-ERROR", "integer value " QLLD " does not fit the limits of "
                     "ODBCT_ULONG odbc_bind", n);
                 return -1;
@@ -1992,7 +2572,7 @@ int ODBCStatement::bindTypeULongArray(int column, QoreValue arg, SQLRETURN& ret,
         }
     } else if (argtype == NT_INT) {
         int64 n = arg.getAsBigInt();
-        if (n < 0 || n > static_cast<int64>(ULONG_MAX)) {
+        if (n < 0 || n > static_cast<int64>(UINT_MAX)) {
             xsink->raiseException("ODBC-BIND-ERROR", "integer value " QLLD " does not fit the limits of ODBCT_ULONG "
                 "odbc_bind", n);
             return -1;
@@ -2094,7 +2674,7 @@ int ODBCStatement::bindTypeUShortArray(int column, QoreValue arg, SQLRETURN& ret
     }
 
     ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
-        SQL_SMALLINT, SMALLINT_COLSIZE, 0, array, sizeof(uint16_t), 0);
+        SQL_INTEGER, INTEGER_COLSIZE, 0, array, sizeof(uint16_t), 0);
     return 0;
 }
 
@@ -2146,7 +2726,7 @@ int ODBCStatement::bindTypeSTinyintArray(int column, QoreValue arg, SQLRETURN& r
 int ODBCStatement::bindTypeUTinyintArray(int column, QoreValue arg, SQLRETURN& ret, ExceptionSink* xsink) {
     qore_type_t argtype = arg.getType();
     size_t arraySize = arrayHolder.getArraySize();
-    uint8_t* array = arrayHolder.addUint8Array(xsink);
+    uint16_t* array = arrayHolder.addUint16Array(xsink);
     if (!array)
         return -1;
 
@@ -2166,7 +2746,7 @@ int ODBCStatement::bindTypeUTinyintArray(int column, QoreValue arg, SQLRETURN& r
                     "ODBCT_UTINYINT odbc_bind", n);
                 return -1;
             }
-            array[i] = static_cast<uint8_t>(n);
+            array[i] = static_cast<uint16_t>(n);
         }
     } else if (argtype == NT_INT) {
         int64 n = arg.getAsBigInt();
@@ -2177,15 +2757,15 @@ int ODBCStatement::bindTypeUTinyintArray(int column, QoreValue arg, SQLRETURN& r
         }
 
         for (size_t i = 0; i < arraySize; i++)
-            array[i] = static_cast<uint8_t>(n);
+            array[i] = static_cast<uint16_t>(n);
     } else {
         xsink->raiseException("ODBC-BIND-ERROR", "non-int value or non-int list passed with ODBCT_UTINYINT "
             "odbc_bind");
         return -1;
     }
 
-    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_UTINYINT,
-        SQL_TINYINT, TINYINT_COLSIZE, 0, array, sizeof(uint8_t), 0);
+    ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_USHORT,
+        SQL_INTEGER, INTEGER_COLSIZE, 0, array, sizeof(uint16_t), 0);
     return 0;
 }
 
@@ -3358,8 +3938,8 @@ SQLLEN* ODBCStatement::createIndArray(SQLLEN indicator, ExceptionSink* xsink) {
 
 #define ODBC_STR_BLOCK_SIZE 512
 QoreValue ODBCStatement::getColumnValue(int column, ODBCResultColumn& rcol, ExceptionSink* xsink) {
-    SQLLEN indicator;
-    SQLRETURN ret;
+    SQLLEN indicator = SQL_NULL_DATA;
+    SQLRETURN ret = SQL_ERROR;
 
     /*
     fprintf(stderr, "getColumnValue: row=%d, col=%d, dataType=%d\n", readRows, column, rcol.dataType);
@@ -3435,86 +4015,47 @@ QoreValue ODBCStatement::getColumnValue(int column, ODBCResultColumn& rcol, Exce
         case SQL_WCHAR:
         case SQL_WVARCHAR:
         case SQL_WLONGVARCHAR: {
-            // retrieve data with SQL_C_CHAR
-            SQLWCHAR unused[1];
-            ret = SQLGetData(stmt, column, SQL_C_CHAR, unused, 0, &indicator); // Find out data size
-            if (ret == SQL_NO_DATA) {
-                // No data, therefore returning empty string
-                return new QoreStringNode;
-            }
-            if (SQL_SUCCEEDED(ret) && (indicator != SQL_NULL_DATA)) {
-                if (indicator == SQL_NO_TOTAL) {
-                    // we need to select the data piecewise
-                    SimpleRefHolder<QoreStringNode> str(new QoreStringNode("", getQoreEncoding()));
-                    size_t next_block = ODBC_STR_BLOCK_SIZE;
-                    while (true) {
-                        size_t size = str->capacity() - str->size();
-                        if (size < next_block) {
-                            str->reserve(str->capacity() + next_block);
-                            size = str->capacity() - str->size();
-                        }
-                        ret = SQLGetData(stmt, column, SQL_C_CHAR, (SQLPOINTER)(str->c_str() + str->size()), size,
-                            &indicator);
-                        if (!SQL_SUCCEEDED(ret) || (indicator == SQL_NULL_DATA)) {
-                            break;
-                        }
-                        size_t delta = strlen(str->c_str() + str->size());
-                        //printd(5, "got %d bytes (size: %d indicator: %d)\n", (int)delta, (int)str->size(),
-                        //    (int)indicator);
-                        if (delta) {
-                            str->terminate(str->size() + delta);
-                        }
-                        if (indicator > 0) {
-                            if (delta == (size_t)indicator) {
-                                str->trim_trailing(' ');
-                                return str.release();
-                            }
-                            next_block = indicator - str->size() + 1;
-                        }
-                        if (!delta) {
-                            xsink->raiseException("ODBC-DATA-ERROR", "cannot determine length of character data "
-                                "chunk received in row #%d column #%d", readRows, column);
-                            return QoreValue();
-                        }
-                    }
-                } else if (indicator < 0) {
-                    xsink->raiseException("ODBC-DATA-ERROR", "cannot retrieve character data in row #%d column #%d; "
-                        "the ODBC driver indicated invalid length %d for the column", readRows, column,
-                        (int)indicator);
-                    return QoreValue();
-                } else {
-                    SQLLEN buflen = indicator + 1; // Ending \0 char.
-                    //printd(5, "column has length %d bytes\n", (int)indicator);
-                    char* buf = static_cast<char*>(malloc(buflen));
-                    if (!buf) {
-                        xsink->raiseException("DBI:ODBC:MEMORY-ERROR",
-                            "could not allocate buffer of " QLLD " bytes for character data in row #%d column #%d",
-                            buflen, readRows, column);
-                        return QoreValue();
-                    }
-                    if (!indicator) {
-                        free(buf);
-                        return new QoreStringNode(getQoreEncoding());
-                    }
-                    ret = SQLGetData(stmt, column, SQL_C_CHAR, reinterpret_cast<SQLPOINTER>(buf), buflen,
-                        &indicator);
-                    if (SQL_SUCCEEDED(ret)) {
-                        // PostgreSQL-specific hack, needed because it returns BOOLEANs as VARCHAR values '0' & '1'
-                        if (buflen >= 2 && !buf[1] && (buf[0] == '0' || buf[0] == '1')) {
-                            char descTypeName[32];
-                            SQLColAttributeA(stmt, column, SQL_DESC_TYPE_NAME, descTypeName, 32, 0, 0);
-                            if (strcmp(descTypeName, "bool") == 0) {
-                                bool rv = (buf[0] != '0');
-                                free(buf);
-                                return rv;
-                            }
-                        }
+            SimpleRefHolder<QoreStringNode> str(new QoreStringNode("", getQoreEncoding()));
+            char buf[ODBC_STR_BLOCK_SIZE + 1];
 
-                        QoreStringNodeHolder rv(new QoreStringNode(buf, indicator, buflen, getQoreEncoding()));
-                        rv->trim_trailing(' ');
-                        return rv.release();
+            while (true) {
+                if (qore_check_cancel(xsink)) {
+                    return QoreValue();
+                }
+
+                memset(buf, 0, sizeof(buf));
+                ret = SQLGetData(stmt, column, SQL_C_CHAR, reinterpret_cast<SQLPOINTER>(buf), sizeof(buf),
+                    &indicator);
+                if (ret == SQL_NO_DATA) {
+                    str->trim_trailing(' ');
+                    return str.release();
+                }
+                if (!SQL_SUCCEEDED(ret) || indicator == SQL_NULL_DATA) {
+                    break;
+                }
+
+                size_t delta = strnlen(buf, sizeof(buf));
+                if (delta) {
+                    if (!str->size() && delta == 1 && (buf[0] == '0' || buf[0] == '1')) {
+                        // PostgreSQL-specific hack, needed because it returns BOOLEANs as VARCHAR values '0' & '1'
+                        char descTypeName[32];
+                        SQLColAttributeA(stmt, column, SQL_DESC_TYPE_NAME, descTypeName, 32, 0, 0);
+                        if (strcmp(descTypeName, "bool") == 0) {
+                            return buf[0] != '0';
+                        }
                     }
-                    free(buf);
+                    str->concat(buf, delta);
+                }
+
+                if (ret == SQL_SUCCESS) {
+                    str->trim_trailing(' ');
+                    return str.release();
+                }
+
+                if (!delta) {
+                    xsink->raiseException("ODBC-DATA-ERROR", "cannot determine length of character data chunk "
+                        "received in row #%d column #%d", readRows, column);
+                    return QoreValue();
                 }
             }
             break;

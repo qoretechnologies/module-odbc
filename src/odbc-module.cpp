@@ -31,6 +31,9 @@
 #include <sqlext.h>
 
 #include "qore/Qore.h"
+#if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
+#include <qore/QoreColumnarResult.h>
+#endif
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -79,6 +82,12 @@ int DBI_ODBC_CAPS =
     | DBI_CAP_TIME_ZONE_SUPPORT
     | DBI_CAP_SERVER_TIME_ZONE
     | DBI_CAP_AUTORECONNECT
+#ifdef QDBI_METHOD_SELECT_TYPED
+    | DBI_CAP_HAS_TYPED_SELECT
+#endif
+#ifdef QDBI_METHOD_SELECT_COLUMNAR
+    | DBI_CAP_HAS_COLUMNAR_SELECT
+#endif
     ;
 
 static int odbc_open(Datasource* ds, ExceptionSink* xsink) {
@@ -105,6 +114,30 @@ static QoreValue odbc_select(Datasource* ds, const QoreString* qstr, const QoreL
     return conn->select(qstr, args, xsink);
 }
 
+#ifdef QDBI_METHOD_SELECT_TYPED
+static QoreValue odbc_select_typed(Datasource* ds, const QoreString* qstr, const QoreListNode* args,
+        ExceptionSink* xsink) {
+    odbc::ODBCConnection* conn = static_cast<odbc::ODBCConnection*>(ds->getPrivateData());
+    if (!conn) {
+        xsink->raiseException("ODBC-NO-CONNECTION-ERROR", "there is no open connection");
+        return QoreValue();
+    }
+    return conn->selectTyped(qstr, args, xsink);
+}
+#endif
+
+#ifdef QDBI_METHOD_SELECT_COLUMNAR
+static QoreColumnarResult* odbc_select_columnar(Datasource* ds, const QoreString* qstr, const QoreListNode* args,
+        ExceptionSink* xsink) {
+    odbc::ODBCConnection* conn = static_cast<odbc::ODBCConnection*>(ds->getPrivateData());
+    if (!conn) {
+        xsink->raiseException("ODBC-NO-CONNECTION-ERROR", "there is no open connection");
+        return nullptr;
+    }
+    return conn->selectColumnar(qstr, args, xsink);
+}
+#endif
+
 #ifdef _QORE_HAS_DBI_SELECT_ROW
 static QoreHashNode* odbc_select_row(Datasource* ds, const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
     odbc::ODBCConnection* conn = static_cast<odbc::ODBCConnection*>(ds->getPrivateData());
@@ -124,6 +157,18 @@ static QoreValue odbc_select_rows(Datasource* ds, const QoreString* qstr, const 
     }
     return conn->selectRows(qstr, args, xsink);
 }
+
+#ifdef QDBI_METHOD_SELECT_TYPED
+static QoreValue odbc_select_rows_typed(Datasource* ds, const QoreString* qstr, const QoreListNode* args,
+        ExceptionSink* xsink) {
+    odbc::ODBCConnection* conn = static_cast<odbc::ODBCConnection*>(ds->getPrivateData());
+    if (!conn) {
+        xsink->raiseException("ODBC-NO-CONNECTION-ERROR", "there is no open connection");
+        return QoreValue();
+    }
+    return conn->selectRowsTyped(qstr, args, xsink);
+}
+#endif
 
 static QoreValue odbc_exec(Datasource* ds, const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
     odbc::ODBCConnection* conn = static_cast<odbc::ODBCConnection*>(ds->getPrivateData());
@@ -291,6 +336,15 @@ static QoreHashNode* odbc_stmt_fetch_columns(SQLStatement* stmt, int maxRows, Ex
     return ps->fetchColumns(maxRows, xsink);
 }
 
+#ifdef QDBI_METHOD_STMT_FETCH_COLUMNAR
+static QoreColumnarResult* odbc_stmt_fetch_columnar(SQLStatement* stmt, int maxRows, ExceptionSink* xsink) {
+    odbc::ODBCPreparedStatement* ps = static_cast<odbc::ODBCPreparedStatement*>(stmt->getPrivateData());
+    assert(ps);
+
+    return ps->fetchColumnar(maxRows, xsink);
+}
+#endif
+
 static QoreHashNode* odbc_stmt_describe(SQLStatement* stmt, ExceptionSink* xsink) {
     odbc::ODBCPreparedStatement* ps = static_cast<odbc::ODBCPreparedStatement*>(stmt->getPrivateData());
     assert(ps);
@@ -350,6 +404,13 @@ static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
     methods.add(QDBI_METHOD_OPEN, odbc_open);
     methods.add(QDBI_METHOD_CLOSE, odbc_close);
     methods.add(QDBI_METHOD_SELECT, odbc_select);
+#ifdef QDBI_METHOD_SELECT_TYPED
+    methods.add(QDBI_METHOD_SELECT_TYPED, odbc_select_typed);
+    methods.add(QDBI_METHOD_SELECT_ROWS_TYPED, odbc_select_rows_typed);
+#endif
+#ifdef QDBI_METHOD_SELECT_COLUMNAR
+    methods.add(QDBI_METHOD_SELECT_COLUMNAR, odbc_select_columnar);
+#endif
     methods.add(QDBI_METHOD_SELECT_ROW, odbc_select_row);
     methods.add(QDBI_METHOD_SELECT_ROWS, odbc_select_rows);
     methods.add(QDBI_METHOD_EXEC, odbc_exec);
@@ -371,6 +432,9 @@ static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
     methods.add(QDBI_METHOD_STMT_FETCH_ROW, odbc_stmt_fetch_row);
     methods.add(QDBI_METHOD_STMT_FETCH_ROWS, odbc_stmt_fetch_rows);
     methods.add(QDBI_METHOD_STMT_FETCH_COLUMNS, odbc_stmt_fetch_columns);
+#ifdef QDBI_METHOD_STMT_FETCH_COLUMNAR
+    methods.add(QDBI_METHOD_STMT_FETCH_COLUMNAR, odbc_stmt_fetch_columnar);
+#endif
     methods.add(QDBI_METHOD_STMT_DESCRIBE, odbc_stmt_describe);
     methods.add(QDBI_METHOD_STMT_NEXT, odbc_stmt_next);
     methods.add(QDBI_METHOD_STMT_FREE, odbc_stmt_free);

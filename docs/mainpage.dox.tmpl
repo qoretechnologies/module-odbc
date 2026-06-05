@@ -81,8 +81,17 @@ Datasource db(SQL::DSODBC, user, pass, dsn, "UTF8");
     - \c DBI_CAP_HAS_NUMBER_SUPPORT
     - \c DBI_CAP_HAS_OPTION_SUPPORT
     - \c DBI_CAP_SERVER_TIME_ZONE
+    - \c DBI_CAP_HAS_COLUMNAR_SELECT
 
     The driver employs efficient binary bindings for all non-text data types and fully supports multidimensional arrays when selecting and binding by value.
+
+    When built against a %Qore library with columnar DBI support, the driver implements
+    \c Datasource::selectColumnar() and \c SQLStatement::fetchColumnar() to return
+    \c Qore::SQL::ColumnarResult objects suitable for DataFrame and analytical workloads.
+    Integer and floating-point columns are returned as dense \c buffer<int64>
+    and \c buffer<float64> values. Safe \c SQL_NUMERIC and \c SQL_DECIMAL
+    columns with precision up to 38 are returned as \c buffer<decimal128> when
+    numeric results are not configured as strings.
 
     The \c Datasource::getServerVersion() method is implemented for this driver and returns an integer giving the major, minor, and sub version numbers in a single integer according to the following formula:
 
@@ -450,6 +459,10 @@ hash: (1 member)
     - fixed wrong error message when setting invalid \c connection-timeout option
     - fixed missing return statements after validation errors in \c setOption()
     - fixed \c assert() instead of proper null check in \c odbc_get_driver_real_name()
+    - added columnar DBI result support with \c Datasource::selectColumnar() and
+      \c SQLStatement::fetchColumnar() when built against %Qore with columnar DBI APIs
+    - optimized columnar DBI results to return dense buffers for integer, floating-point,
+      and safe \c SQL_NUMERIC / \c SQL_DECIMAL columns
 
     @subsection odbcv1_1_3 odbc Driver Version 1.1.3
     - fixed handling retrieving 0-length \c VARCHAR values
