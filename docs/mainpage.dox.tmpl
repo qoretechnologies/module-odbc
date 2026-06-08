@@ -450,6 +450,8 @@ hash: (1 member)
     @section odbcreleasenotes Release Notes
 
     @subsection odbcv1_2_0 odbc Driver Version 1.2.0
+    - fixed a security bug where the connection password was leaked in the \c ODBC-CONNECTION-ERROR
+      exception message; password values in the connection string are now masked in error messages
     - added support for returning the ODBC driver name in \c Datasource::getDriverRealName()
       (<a href="https://github.com/qorelanguage/qore/issues/4690">issue 4690</a>)
     - added schema introspection functions: \c odbc_get_tables(), \c odbc_get_columns(),

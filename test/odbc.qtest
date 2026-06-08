@@ -5,9 +5,9 @@
 
 %requires QUnit
 
-%try-module odbc
-%define NoOdbc
-%endtry
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
 
 %exec-class OdbcTest
 
@@ -381,6 +381,7 @@ class OdbcTest inherits QUnit::Test {
     }
 
     constructor() : QUnit::Test("OdbcTest", "1.0", \ARGV) {
+        addTestCase("Password redaction test", \passwordRedactionTest());
         addTestCase("Basic test", \basicTest());
         addTestCase("Types test", \typesTest());
         addTestCase("Timezone test", \timezoneTest());
@@ -394,13 +395,6 @@ class OdbcTest inherits QUnit::Test {
     destructor() {}
 
     globalSetUp() {
-%ifdef NoOdbc
-        no_odbc = True;
-        if (no_odbc) {
-            return;
-        }
-%endif
-
         connStr = ENV.QORE_DB_CONNSTR_ODBC;
         if (!connStr) {
             no_odbc = True;
@@ -679,6 +673,33 @@ class OdbcTest inherits QUnit::Test {
 
     list asList(auto value) {
         return value.type() == Type::List ? value : value.toList();
+    }
+
+    passwordRedactionTest() {
+        # This test verifies that the connection password is never leaked into the
+        # ODBC-CONNECTION-ERROR exception (the connection string embedded in the message must be
+        # sanitized). It does not require a working database: connecting with a bogus datasource
+        # fails at the driver-connect call, which is exactly where the leak occurred.
+        #
+        # Note: this test is intentionally independent of the QORE_DB_CONNSTR_ODBC environment
+        # variable (i.e. it does not check the "no_odbc" flag) so that it runs even when no live
+        # database connection is configured - it only needs the ODBC module/driver manager to load.
+        string password = "Sup3rSecret_PWD_value!";
+        string username = "redaction_test_user";
+
+        Datasource test("odbc", username, password);
+        try {
+            test.open();
+            fail("expected ODBC-CONNECTION-ERROR was not thrown");
+        } catch (hash<ExceptionInfo> ex) {
+            assertEq("ODBC-CONNECTION-ERROR", ex.err);
+            # the plaintext password must NEVER appear anywhere in the exception
+            assertEq(-1, ex.desc.find(password), "password must not be leaked in the connection exception");
+            # the connection string is still reported (with the password masked) to aid debugging
+            assertTrue(ex.desc.find("<masked>") > -1, "password should be masked in the connection exception");
+            # non-secret connection details (the username) must still be present for diagnostics
+            assertTrue(ex.desc.find(username) > -1, "username should be present in the connection exception");
+        }
     }
 
     basicTest() {

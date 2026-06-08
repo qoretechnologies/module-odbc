@@ -88,6 +88,75 @@ ODBCConnection::~ODBCConnection() {
     }
 }
 
+//! Returns a copy of an ODBC connection string with the values of any password keys redacted.
+/** This is used to ensure that credentials (the connection password) are never leaked into
+    exception messages or logs. The values of the \c PWD and \c PASSWORD keys (case-insensitive)
+    are replaced with a fixed placeholder, regardless of how they entered the connection string
+    (explicit datasource password, a raw connection string in the DB name, or connection options).
+
+    @param cstr the connection string to sanitize
+    @return the connection string with all password values masked
+ */
+static QoreString getSafeConnStr(const QoreString& cstr) {
+    static const char* MASK = "<masked>";
+    QoreString safe(QCS_UTF8);
+    const char* p = cstr.c_str();
+    while (*p) {
+        const char* start = p;
+        // Find the end of the key (either '=' or ';' or end of string).
+        const char* eq = p;
+        while (*eq && *eq != '=' && *eq != ';') {
+            ++eq;
+        }
+        if (*eq != '=') {
+            // No "key=value" pair in this segment; copy it verbatim (including any trailing ';').
+            while (*p && *p != ';') {
+                safe.concat(*p++);
+            }
+            if (*p == ';') {
+                safe.concat(*p++);
+            }
+            continue;
+        }
+
+        // Extract the (trimmed, upper-cased) key to check whether it holds a password.
+        QoreString key(start, eq - start, QCS_UTF8);
+        key.trim();
+        key.toupr();
+        bool redact = key.equal("PWD") || key.equal("PASSWORD");
+
+        // Determine the extent of the value, respecting brace-quoted values (e.g. "{...}").
+        const char* v = eq + 1;
+        const char* vend = v;
+        if (*v == '{') {
+            ++vend;
+            while (*vend && *vend != '}') {
+                ++vend;
+            }
+            if (*vend == '}') {
+                ++vend;
+            }
+        } else {
+            while (*vend && *vend != ';') {
+                ++vend;
+            }
+        }
+
+        // Copy "key=" verbatim, then either the masked placeholder or the original value.
+        safe.concat(start, (eq - start) + 1);
+        if (redact) {
+            safe.concat(MASK);
+        } else {
+            safe.concat(v, vend - v);
+        }
+        p = vend;
+        if (*p == ';') {
+            safe.concat(*p++);
+        }
+    }
+    return safe;
+}
+
 int ODBCConnection::connect(ExceptionSink* xsink) {
     SQLRETURN ret;
 
@@ -120,7 +189,10 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
     if (!SQL_SUCCEEDED(ret)) { // error
         std::string s("could not connect to the datasource; connection string: '%s'");
         ODBCErrorHelper::extractDiag(SQL_HANDLE_DBC, dbc, s);
-        xsink->raiseException("ODBC-CONNECTION-ERROR", s.c_str(), connStr.c_str());
+        // NOTE: the connection string is sanitized to ensure that the password is never leaked
+        // into the exception message
+        QoreString safeConnStr(getSafeConnStr(connStr));
+        xsink->raiseException("ODBC-CONNECTION-ERROR", s.c_str(), safeConnStr.c_str());
         return -1;
     }
     connected = true;
