@@ -1222,7 +1222,8 @@ int ODBCStatement::parse(QoreString* str, const QoreListNode* args, ExceptionSin
                 int offset = p - str->c_str();
 
                 p++;
-                QoreValue v = args ? args->retrieveEntry(index++) : QoreValue();
+                // see below: resolve an indirect reference to the value it refers to
+                QoreValue v = args ? args->retrieveEntry(index++).resolveIndirect() : QoreValue();
                 if ((*p) == 'd') {
                     DBI_concat_numeric(&tmp, v);
                     str->replace(offset, 2, tmp.c_str());
@@ -1343,7 +1344,9 @@ bool ODBCStatement::hasArrays(const QoreListNode* args) const {
 size_t ODBCStatement::findArraySizeOfArgs(const QoreListNode* args) const {
     size_t count = args ? args->size() : 0;
     for (unsigned int i = 0; i < count; i++) {
-        QoreValue arg = args->retrieveEntry(i);
+        // a caller's argument list may hold a weak (":=") or opaque ("@=") reference; the
+        // read yields the reference, so resolve it before dispatching on the type
+        QoreValue arg = args->retrieveEntry(i).resolveIndirect();
         qore_type_t ntype = arg.getType();
         if (ntype == NT_LIST) {
             return arg.get<const QoreListNode>()->size();
@@ -1372,7 +1375,9 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
 
     size_t count = args ? args->size() : 0;
     for (unsigned int i = 0; i < count; i++) {
-        QoreValue arg = args->retrieveEntry(i);
+        // a caller's argument list may hold a weak (":=") or opaque ("@=") reference; the
+        // read yields the reference, so resolve it before dispatching on the type
+        QoreValue arg = args->retrieveEntry(i).resolveIndirect();
         SQLRETURN ret;
 
         if (arg.isNullOrNothing()) { // Bind NULL argument.
@@ -1623,7 +1628,9 @@ int ODBCStatement::bindInternArray(const QoreListNode* args, ExceptionSink* xsin
 
     size_t count = args ? args->size() : 0;
     for (unsigned int i = 0; i < count; i++) {
-        QoreValue arg = args->retrieveEntry(i);
+        // a caller's argument list may hold a weak (":=") or opaque ("@=") reference; the
+        // read yields the reference, so resolve it before dispatching on the type
+        QoreValue arg = args->retrieveEntry(i).resolveIndirect();
 
         if (arg.isNullOrNothing()) { // Handle NULL argument.
             bindParamArraySingleValue(i + 1, arg, xsink);
@@ -1727,7 +1734,8 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
     // Find out datatype of values in the list.
     qore_type_t ntype = NT_NULL;
     for (size_t i = 0; i < count; i++) {
-        QoreValue arg = lst->retrieveEntry(i);
+        // see above: a list element may be an indirect reference
+        QoreValue arg = lst->retrieveEntry(i).resolveIndirect();
         if (!arg.isNullOrNothing()) {
             if (ntype == NT_NULL) {
                 ntype = arg.getType();
