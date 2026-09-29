@@ -1,0 +1,8 @@
+Tests: runtime
+Depends: qore-odbc-module, postgresql, postgresql-common, odbc-postgresql
+# QUnit and temporary PostgreSQL clusters report progress to stderr.
+Restrictions: allow-stderr
+
+Tests: compiler
+Depends: qore-odbc-module, libqore-dev, postgresql, postgresql-common, odbc-postgresql
+Restrictions: allow-stderr

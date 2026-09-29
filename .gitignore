@@ -38,3 +38,15 @@ docs/mainpage.dox
 docs/odbc/
 docs/qlib/Doxyfile.*
 docs/qlib/*.dox.h
+
+# Debian package build products
+/obj-*/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper
+/debian/qore-odbc-module/
+/debian/qore-odbc-module-doc/
+/debian/tmp/
+**/__pycache__/

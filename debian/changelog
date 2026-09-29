@@ -1,0 +1,9 @@
+qore-odbc-module (1.2.0+git20260928.1-0qore1~ubuntu26.04) resolute; urgency=medium
+
+  * Package the native ODBC driver, compiler metadata, docs and example test.
+  * Use distribution unixODBC, native hardening and automatic debug symbols.
+  * Test through PostgreSQL ODBC using disposable local database clusters.
+  * Add installed runtime and fresh compiler/database round-trip tests.
+  * Support documentation profiles and reproducible offline builds.
+
+ -- David Nichols <david@qore.org>  Tue, 29 Sep 2026 01:01:28 +0000
