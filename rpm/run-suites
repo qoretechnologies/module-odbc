@@ -1,0 +1,10 @@
+#!/bin/sh
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+set -eu
+test -n "${QORE_DB_CONNSTR_ODBC:?run inside the PostgreSQL fixture}"
+module=${QORE_ODBC_BINARY_MODULE:-odbc}
+/usr/bin/qore -b --enable-debug -l "$module" -e 'Datasource db(ENV.QORE_DB_CONNSTR_ODBC); db.open(); db.close();'
+for suite in "$1"/*.qtest; do
+    timeout 180 /usr/bin/qore -b --enable-debug -l "$module" "$suite" -v
+done
