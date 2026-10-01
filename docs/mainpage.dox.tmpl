@@ -141,7 +141,7 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     Options are stored separately for each connection.
 
-    @warning In order to use \c int parameters in commands for the Oracle database, you either need to set the \c "bigint-string" option so that Qore int values are sent as strings instead of as 64bit int values (\c SQL_C_SBIGINT), or you have to bind integer values using \ref odbc_bind() and the \ref odbc_bind_constants "odbc_bind() constants" \c ODBCT_SLONG, \c ODBCT_ULONG, \c ODBCT_SSHORT, \c ODBCT_USHORT, \c ODBCT_STINYINT or \c ODBCT_UTINYINT, and make sure that the integers fit the limits imposed by these types.
+    @warning In order to use \c int parameters in commands for the Oracle database, you either need to set the \c "bigint-string" option so that Qore int values are sent as strings instead of as 64bit int values (\c SQL_C_SBIGINT), or you have to bind integer values using \ref Qore::odbc::odbc_bind "odbc_bind()" and the \ref odbc_bind_constants "odbc_bind() constants" \c ODBCT_SLONG, \c ODBCT_ULONG, \c ODBCT_SSHORT, \c ODBCT_USHORT, \c ODBCT_STINYINT or \c ODBCT_UTINYINT, and make sure that the integers fit the limits imposed by these types.
 
     @subsection odbc_number_options Number Options
 
@@ -240,7 +240,7 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     @section odbcbind Binding and Types
 
-    Apart from simply passing values for binding you can also use the \ref odbc_bind() function to specify the type to bind. See \ref odbc_binding_by_value for more information about how types are bound when binding by value with this driver.
+    Apart from simply passing values for binding you can also use the \ref Qore::odbc::odbc_bind "odbc_bind()" function to specify the type to bind. See \ref odbc_binding_by_value for more information about how types are bound when binding by value with this driver.
 
     For \c NUMERIC columns, the %d specification in the query string can be used to substitute a numeric value or a literal null directly in the query string, providing the same effect as a bind by value in a very convenient form for the programmer. For example:
 
@@ -278,7 +278,7 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     1) Use the \c "bigint-string" option when opening an ODBC connection. This causes all \c Qore integer values to be bound and sent to the DB as strings. It is less efficient than binding as bigints but works.
 
-    2) Make sure that the integer values fit the respective numerical limits and use \ref odbc_bind() to bind the integer values as one of the following ODBC datatypes: \c SQL_C_SLONG, \c SQL_C_ULONG, \c SQL_C_SSHORT, \c SQL_C_USHORT, \c SQL_C_STINYINT or \c SQL_C_UTINYINT.
+    2) Make sure that the integer values fit the respective numerical limits and use \ref Qore::odbc::odbc_bind "odbc_bind()" to bind the integer values as one of the following ODBC datatypes: \c SQL_C_SLONG, \c SQL_C_ULONG, \c SQL_C_SSHORT, \c SQL_C_USHORT, \c SQL_C_STINYINT or \c SQL_C_UTINYINT.
 
     @see odbc_bind_constants
 
@@ -448,6 +448,9 @@ hash: (1 member)
     @endverbatim
 
     @section odbcreleasenotes Release Notes
+
+    - API documentation uses the public QPP declarations and the driver overview
+      without exposing implementation headers
 
     @subsection odbcv1_2_0 odbc Driver Version 1.2.0
     - fixed a security bug where the connection password was leaked in the \c ODBC-CONNECTION-ERROR
