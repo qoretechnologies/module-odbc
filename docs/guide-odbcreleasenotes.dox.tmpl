@@ -13,9 +13,6 @@
       exception message; password values in the connection string are now masked in error messages
     - added support for returning the ODBC driver name in \c Datasource::getDriverRealName()
       (<a href="https://github.com/qorelanguage/qore/issues/4690">issue 4690</a>)
-    - added schema introspection functions: \c odbc_get_tables(), \c odbc_get_columns(),
-      \c odbc_get_primary_keys(), \c odbc_get_foreign_keys(), \c odbc_get_indexes(),
-      \c odbc_get_procedures(), \c odbc_get_type_info()
     - fixed bug where \c getOption() returned swapped values for \c login-timeout and \c connection-timeout
     - fixed wrong error message when setting invalid \c connection-timeout option
     - fixed missing return statements after validation errors in \c setOption()

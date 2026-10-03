@@ -1,84 +1,67 @@
 /* Copyright (C) 2026 Qore Technologies, s.r.o. */
 
-/** @page odbcschemaguide Schema Introspection Functions
+/** @page odbcschemaguide Schema and Result Metadata
 
     @tableofcontents
 
-    The ODBC module provides functions for querying database schema metadata using ODBC catalog functions.
+    The ODBC driver exposes result-column metadata through the standard %Qore DBI APIs.
+    Use @ref Qore::SQL::SQLStatement::describe() for a prepared statement. It returns column
+    descriptions; it does not enumerate a database's tables, keys, indexes, or stored procedures.
+    The driver implements statement-level description only; the separate
+    @ref Qore::SQL::Datasource::describe() method is not supported.
 
-    @section odbc_schema_tables odbc_get_tables()
+    To inspect a database schema, query the database's system catalog using
+    @ref Qore::SQL::Datasource::selectRows(). Catalog views and the information they expose
+    depend on the database server. The module does not expose standalone ODBC catalog functions.
 
-    Returns a list of tables in the database.
+    @section odbc_schema_columns Describing query columns
 
-    @code{.py}
-    list<hash<auto>> tables = odbc_get_tables(ds);
-    # With optional filters:
-    list<hash<auto>> tables = odbc_get_tables(ds, catalog, schema, table_pattern, type);
-    @endcode
+    @ref Qore::SQL::SQLStatement::describe() returns a hash keyed by result-column name. Each
+    value describes that column's name, %Qore type code, maximum size, native type, and native
+    type code. The ODBC driver also reports column nullability. See the API reference for the
+    return format and @ref odbcbindguide for SQL-to-%Qore type mappings.
 
-    Each hash in the returned list contains: \c catalog, \c schema, \c name, \c type, \c remarks.
+    This example assumes \c ds is an open datasource and the database contains a \c users table
+    with \c id and \c name columns. The false predicate avoids fetching table contents while
+    retaining the result-column descriptions:
 
-    @section odbc_schema_columns odbc_get_columns()
-
-    Returns column metadata for a table.
-
-    @code{.py}
-    list<hash<auto>> columns = odbc_get_columns(ds, "users");
-    # With optional filters:
-    list<hash<auto>> columns = odbc_get_columns(ds, "users", catalog, schema, column_pattern);
-    @endcode
-
-    Each hash contains: \c catalog, \c schema, \c table, \c name, \c type, \c type_name, \c size, \c decimal_digits, \c nullable, \c remarks, \c default, \c ordinal_position.
-
-    @section odbc_schema_primary_keys odbc_get_primary_keys()
-
-    Returns primary key information for a table.
+    Obtain a statement with @ref Qore::SQL::Datasource::getSQLStatement(), set its SQL with
+    @ref Qore::SQL::SQLStatement::prepare(), execute it with @ref Qore::SQL::SQLStatement::exec(),
+    and read the column descriptions with @ref Qore::SQL::SQLStatement::describe(). Close the
+    statement with @ref Qore::SQL::SQLStatement::close() when it is no longer needed.
 
     @code{.py}
-    list<hash<auto>> pk = odbc_get_primary_keys(ds, "users");
+SQLStatement stmt = ds.getSQLStatement();
+on_exit stmt.close();
+stmt.prepare("SELECT id, name FROM users WHERE 1 = 0");
+stmt.exec();
+hash<auto> columns = stmt.describe();
+printf("%Y\n", columns);
     @endcode
 
-    Each hash contains: \c catalog, \c schema, \c table, \c column, \c key_seq, \c pk_name.
+    The surrounding transaction remains the caller's responsibility; see @ref odbctrans and
+    @ref Qore::SQL::Datasource::commit() / @ref Qore::SQL::Datasource::rollback().
 
-    @section odbc_schema_foreign_keys odbc_get_foreign_keys()
+    @section odbc_schema_tables Querying the database catalog
 
-    Returns foreign key relationships for a table.
+    @anchor odbc_schema_primary_keys
+    @anchor odbc_schema_foreign_keys
+    @anchor odbc_schema_indexes
+    @anchor odbc_schema_procedures
+    @anchor odbc_schema_type_info
+
+    @ref Qore::SQL::Datasource::selectRows() returns query results as a list of row hashes,
+    or \c NOTHING when no rows match. The following PostgreSQL example lists tables visible
+    through its \c information_schema.tables view. Adapt catalog queries to the connected
+    database; ODBC does not make a server's SQL catalog portable.
 
     @code{.py}
-    list<hash<auto>> fks = odbc_get_foreign_keys(ds, "orders");
+*list<auto> tables = ds.selectRows("SELECT table_schema, table_name FROM information_schema.tables "
+    "WHERE table_schema = %v ORDER BY table_name", "public");
+printf("%Y\n", tables);
     @endcode
 
-    Each hash contains: \c pk_catalog, \c pk_schema, \c pk_table, \c pk_column, \c fk_catalog, \c fk_schema, \c fk_table, \c fk_column, \c key_seq, \c update_rule, \c delete_rule, \c fk_name, \c pk_name.
-
-    @section odbc_schema_indexes odbc_get_indexes()
-
-    Returns index information for a table.
-
-    @code{.py}
-    list<hash<auto>> indexes = odbc_get_indexes(ds, "users");
-    # Get only unique indexes:
-    list<hash<auto>> unique_indexes = odbc_get_indexes(ds, "users", True);
-    @endcode
-
-    Each hash contains: \c catalog, \c schema, \c table, \c non_unique, \c index_name, \c type, \c ordinal_position, \c column, \c asc_or_desc, \c cardinality, \c pages.
-
-    @section odbc_schema_procedures odbc_get_procedures()
-
-    Returns stored procedures in the database.
-
-    @code{.py}
-    list<hash<auto>> procs = odbc_get_procedures(ds);
-    @endcode
-
-    Each hash contains: \c catalog, \c schema, \c name, \c num_input_params, \c num_output_params, \c num_result_sets, \c remarks, \c type.
-
-    @section odbc_schema_type_info odbc_get_type_info()
-
-    Returns supported SQL data types.
-
-    @code{.py}
-    list<hash<auto>> types = odbc_get_type_info(ds);
-    @endcode
-
-    Each hash contains information about supported data types including \c type_name and \c data_type.
+    Primary and foreign keys, indexes, stored procedures, and available data types likewise
+    require the appropriate catalog queries for the database server. Result-column descriptions
+    alone do not provide that schema information.
 */
