@@ -4,10 +4,11 @@
 
     @tableofcontents
 
+    @section odbcv1_2_0 odbc Driver Version 1.2.0
+
     - API documentation uses the public QPP declarations and the driver overview
       without exposing implementation headers
 
-    @section odbcv1_2_0 odbc Driver Version 1.2.0
     - fixed a security bug where the connection password was leaked in the \c ODBC-CONNECTION-ERROR
       exception message; password values in the connection string are now masked in error messages
     - added support for returning the ODBC driver name in \c Datasource::getDriverRealName()

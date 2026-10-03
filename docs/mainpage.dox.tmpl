@@ -107,39 +107,19 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     Like all Qore components, the ODBC DBI driver is thread-safe.
 
-    @section odbcoptions Driver Options
+    @section odbcdocumentation Documentation
 
-    @subpage odbcoptionsguide
-
+    - @anchor odbcoptions @subpage odbcoptionsguide
+    - @anchor odbcexceptions @subpage odbcexceptionsguide
+    - @anchor odbcbind @subpage odbcbindguide
+    - @anchor odbcschema @subpage odbcschemaguide
+    - @anchor odbcstoredprocs @subpage odbcstoredprocsguide
+    - @anchor odbcreleasenotes @subpage odbcreleasenotesguide
 
     @section odbctrans Transaction Management
 
     When using ODBC, all the transactions are started implicitly by executing any command, therefore it is not necessary to do this manually.
 
     An exception in a Datasource::exec() method as the first statement of a transaction will cause an automatic implicit \c "rollback" to be executed to maintain compatibility with other Qore DBI drivers.
-
-    @section odbcexceptions Exception Types and Error Handling
-
-    @subpage odbcexceptionsguide
-
-
-    @section odbcbind Binding and Types
-
-    @subpage odbcbindguide
-
-
-    @section odbcschema Schema Introspection Functions
-
-    @subpage odbcschemaguide
-
-
-    @section odbcstoredprocs Stored Procedures
-
-    @subpage odbcstoredprocsguide
-
-
-    @section odbcreleasenotes Release Notes
-
-    @subpage odbcreleasenotesguide
 
 */
