@@ -1,0 +1,62 @@
+/* Copyright (C) 2026 Qore Technologies, s.r.o. */
+
+/** @page odbcoptionsguide Driver Options
+
+    @tableofcontents
+
+    The odbc driver supports the following DBI options:
+    - \c "bigint-native": bind Qore int values as native \c SQL_C_SBIGINT values to ODBC statements; this is the
+      default
+    - \c "bigint-string": bind Qore int values as \c SQL_C_CHAR values (strings) to ODBC statements
+    - \c "conn": the ODBC connection string (ex: \c "driver=xyz;server=abc" etc)
+    - \c "fractional-precision": precision to use for the fractional seconds part of date, time, timestamp and
+      interval values; in the range 1-9 (default is 3)
+    - \c "login-timeout": timeout value in seconds used for logging in to the connection (connecting); possible values
+      are integers from 0 up (default is 60); setting the timeout to 0 means to wait indefinitely
+    - \c "connection-timeout": timeout value in seconds used for the connection; possible values are integers from 0
+      up (default is 60); setting the timeout to 0 means to wait indefinitely
+    - \c "numeric-numbers": return received \c SQL_NUMERIC and \c SQL_DECIMAL values as arbitrary-precision numbers
+      (Qore number values)
+    - \c "optimal-numbers": return received \c SQL_NUMERIC and \c SQL_DECIMAL values as integers if possible, if not
+      return them as an arbitrary-precision numbers; this is the default
+    - \c "preserve-case": the case of column names will be preserved; by default this is disabled and column names
+      are converted to lower-case
+    - \c "qore-timezone": accepts a string argument that can be either a region name (ex: \c "Europe/Prague") or a UTC
+      offset (ex: \c "+01:00") to set the server's timezone rules; this is useful if connecting to a database server
+      in a different timezone; if this option is not set then the server's timezone is assumed to be the same as the
+      client's timezone
+    - \c "string-numbers": return received \c SQL_NUMERIC and \c SQL_DECIMAL values as strings (for backwards-
+      compatibility)
+
+    Options can be set in the \c Datasource or \c DatasourcePool constructors as in the following examples:
+    @code{.py}
+    Datasource ds("odbc:user/pass@dsn{numeric-numbers}");
+    DatasourcePool dsp("odbc:user/pass@{optimal-numbers,conn-DRIVER=MySQL ODBC 5.3 Unicode Driver;Server=192.168.20.1;Database=omquser}");
+    @endcode
+
+    Options are stored separately for each connection.
+
+    @warning In order to use \c int parameters in commands for the Oracle database, you either need to set the \c "bigint-string" option so that Qore int values are sent as strings instead of as 64bit int values (\c SQL_C_SBIGINT), or you have to bind integer values using \ref Qore::odbc::odbc_bind "odbc_bind()" and the \ref odbc_bind_constants "odbc_bind() constants" \c ODBCT_SLONG, \c ODBCT_ULONG, \c ODBCT_SSHORT, \c ODBCT_USHORT, \c ODBCT_STINYINT or \c ODBCT_UTINYINT, and make sure that the integers fit the limits imposed by these types.
+
+    @section odbc_number_options Number Options
+
+    The number options (\c "optimal-numbers", \c "string-numbers" and \c "numeric-numbers") are all mutually-exclusive; setting one automatically disables the others. These options also ignore their arguments; the last one set takes effect (also note that setting it with any value sets the option, even False).
+
+    The default if no other option is explicitly set is \c "optimal-numbers".  Note that this represents a change from previous versions where \c NUMERIC or \c DECIMAL values were returned as strings in order to avoid the loss of information.  To set the old behavior, set the \c "string-numbers" option when creating the \c Datasource or \c DatasourcePool object.
+
+    @section odbc_bigint_options Bigint Options
+
+    The bigint options (\c "bigint-native" and \c "bigint-string") are mutually-exclusive; setting one automatically disables the other. These options also ignore their arguments; the last one set takes effect (also note that setting it with any value sets the option, even False).
+
+    The default if no other option is explicitly set is \c "bigint-native".
+
+    @section odbc_frprec_option Fractional Precision Option
+
+    This option sets how big fractional seconds precision will be used when binding any date, time, timestamp and/or interval parameter with seconds part. The default value is 3. Possible values are 1 to 9.
+
+    @section odbc_timeout_options Login Timeout and Connection Timeout Options
+
+    Login timeout option is used to set for how long the ODBC driver should wait during the initial connection phase. Connection timeout option is used to set the timeout for when the connection is open and it stops responding.
+
+    Both of the options have a default value of 60 and can be set to numbers ranging from 0 up. A value of 0 means to wait indefinitely (never time out). Both \c Qore int values and integers in the form of strings can be used to set these options.
+*/

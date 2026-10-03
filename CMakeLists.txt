@@ -50,6 +50,12 @@ set(module_name "odbc")
 
 set(QORE_DOX_TMPL_SRC
   docs/mainpage.dox.tmpl
+    docs/guide-odbcbind.dox.tmpl
+    docs/guide-odbcexceptions.dox.tmpl
+    docs/guide-odbcoptions.dox.tmpl
+    docs/guide-odbcreleasenotes.dox.tmpl
+    docs/guide-odbcschema.dox.tmpl
+    docs/guide-odbcstoredprocs.dox.tmpl
 )
 
 add_library(${module_name} MODULE ${CPP_SRC} ${QPP_SOURCES})
@@ -66,6 +72,14 @@ if (DEFINED ENV{DOXYGEN_EXECUTABLE})
 endif()
 
 set(MODULE_DOX_INPUT ${CMAKE_CURRENT_BINARY_DIR}/mainpage.dox ${QPP_DOX})
+list(APPEND MODULE_DOX_INPUT
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcbind.dox
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcexceptions.dox
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcoptions.dox
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcreleasenotes.dox
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcschema.dox
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcstoredprocs.dox
+)
 qore_external_binary_module(${module_name} ${PROJECT_VERSION})
 
 qore_dist(${PROJECT_VERSION})

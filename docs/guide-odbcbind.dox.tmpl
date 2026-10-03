@@ -1,0 +1,108 @@
+/* Copyright (C) 2026 Qore Technologies, s.r.o. */
+
+/** @page odbcbindguide Binding and Types
+
+    @tableofcontents
+
+    Apart from simply passing values for binding you can also use the \ref Qore::odbc::odbc_bind "odbc_bind()" function to specify the type to bind. See \ref odbc_binding_by_value for more information about how types are bound when binding by value with this driver.
+
+    For \c NUMERIC columns, the %d specification in the query string can be used to substitute a numeric value or a literal null directly in the query string, providing the same effect as a bind by value in a very convenient form for the programmer. For example:
+
+    @code{.py}
+# the %d will be substituted with the value of \c id directly in the query text
+# or with a "null" in case \c id has no value (or is NULL)
+*hash results = db.select("select * from table where id = %d", id);
+    @endcode
+
+    Note that binding by placeholder is not required or supported by this driver; Qore DBI placeholder buffer specifications are ignored when the ODBC driver is used.
+
+    When binding arrays, all data types in the Qore list must be identical.
+
+    When retrieving ODBC data, ODBC types are converted to Qore types as per \ref odbc_to_qore.
+
+    @section odbc_timezone Timezone Support
+
+    The driver now sets the server's time zone rules when the connection is established; this is taken from the current time zone settings of the calling Program object and can also be overridden/changed by setting the \c "qore-timezone" driver option (see @ref odbcoptions).
+
+    All date/time values bound by value are converted to the server's time zone before binding to ensure that date/time values are stored correctly in the server.
+
+    When selecting date/time values, the values returned are tagged with the server's time zone.
+
+    Note that the above rules are applied when the current Program's time zone settings are different than the connection's time zone settings at the time when the write operation (bind) read operation (select) is performed.  This is meant to provide consistent support to connecting to a database server in a different time zone.
+
+    @section odbc_encoding_support Character Encoding Support
+
+    The \c odbc module uses the datasource encoding to transfer strings to and from databases in all cases.
+    Conversions are made to the datasource encoding for strings inbound to the DB, if necessary, and all string data
+    retrieved from the DB is tagged with the datasource's encoding as well.
+
+    @section odbc_oracle_support Oracle Support
+
+    User of this module can use it to connect to Oracle databases. There is one issue however which is connected to this. This module binds \c Qore int values as \c SQL_C_SBIGINT datatype by default. This does not work with Oracle databases though. To overcome this problem, there are two options:
+
+    1) Use the \c "bigint-string" option when opening an ODBC connection. This causes all \c Qore integer values to be bound and sent to the DB as strings. It is less efficient than binding as bigints but works.
+
+    2) Make sure that the integer values fit the respective numerical limits and use \ref Qore::odbc::odbc_bind "odbc_bind()" to bind the integer values as one of the following ODBC datatypes: \c SQL_C_SLONG, \c SQL_C_ULONG, \c SQL_C_SSHORT, \c SQL_C_USHORT, \c SQL_C_STINYINT or \c SQL_C_UTINYINT.
+
+    @see odbc_bind_constants
+
+    @section odbc_binding_by_value Binding By Value
+
+    The following table gives data mapping when binding qore types by value.
+
+    |!QoreType|!ODBC C Type|!ODBC SQL Type|!Description
+    |\c int|\c SQL_C_SBIGINT, \c SQL_C_CHAR|\c SQL_BIGINT|Converting from a BIGINT type to smaller integer types is \
+        done automatically by the specific ODBC DB driver. Qore ints can be bound either as SQL_C_SBIGINT values \
+        (default) or as character strings (needed for Oracle database).
+    |\c float|\c SQL_C_DOUBLE|\c SQL_DOUBLE|Qore float data is converted directly to ODBC DOUBLE data.
+    |\c number|\c SQL_C_CHAR|\c SQL_CHAR|Qore number data is converted to strings before sending.
+    |\c string|\c SQL_C_CHAR, \c SQL_C_WCHAR|\c SQL_CHAR, \c SQL_WCHAR|The character encoding is converted to UTF-8 \
+        if necessary and bound as SQL_CHAR values
+    |\c bool|\c SQL_C_BIT|\c SQL_CHAR|Qore boolean values are sourced as BIT values and sent as CHAR values.
+    |\c date|\c SQL_C_INTERVAL_DAY_TO_SECOND, \c SQL_C_TYPE_TIMESTAMP|\c SQL_INTERVAL_DAY_TO_SECOND, \
+        \c SQL_TYPE_TIMESTAMP|Relative date/time values are bound as interval data, absolute date/time values are \
+        bound as timestamp data
+    |\c binary|\c SQL_C_BINARY|\c SQL_BINARY|Qore binary data is bound directly as binary data.
+
+    @section odbc_to_qore ODBC to Qore Type Mappings
+
+    |!ODBC Type|!Qore Type|!Notes
+    |\c SQL_BIT|\c bool|direct conversion
+    |\c SQL_BINARY|\c binary|direct conversion
+    |\c SQL_VARBINARY|\c binary|direct conversion
+    |\c SQL_LONGVARBINARY|\c binary|direct conversion
+    |\c SQL_CHAR|\c string|direct conversion as UTF-8-encoded strings
+    |\c SQL_VARCHAR|\c string|direct conversion as UTF-8-encoded strings
+    |\c SQL_LONGVARCHAR|\c string|direct conversion as UTF-8-encoded strings
+    |\c SQL_WCHAR|\c string|direct conversion as UTF-8-encoded strings
+    |\c SQL_WVARCHAR|\c string|direct conversion as UTF-8-encoded strings
+    |\c SQL_WLONGVARCHAR|\c string|direct conversion as UTF-8-encoded strings
+    |\c SQL_INTEGER|\c int|direct conversion
+    |\c SQL_BIGINT|\c int|direct conversion
+    |\c SQL_SMALLINT|\c int|direct conversion
+    |\c SQL_TINYINT|\c int|direct conversion
+    |\c SQL_FLOAT|\c float|direct conversion
+    |\c SQL_DOUBLE|\c float|direct conversion
+    |\c SQL_REAL|\c float|direct conversion
+    |\c SQL_NUMERIC|\c int, \c string or \c number|depends on driver options
+    |\c SQL_DECIMAL|\c int, \c string or \c number|depends on driver options
+    |\c SQL_TYPE_DATE|\c date (absolute)|direct conversion
+    |\c SQL_TYPE_TIME|\c date (relative)|direct conversion
+    |\c SQL_TYPE_TIMESTAMP|\c date (absolute)|direct conversion
+    |\c SQL_TYPE_UTCDATETIME| |not supported
+    |\c SQL_TYPE_UTCTIME| |not supported
+    |\c SQL_INTERVAL_MONTH|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_YEAR|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_YEAR_TO_MONTH|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_DAY|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_HOUR|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_MINUTE|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_SECOND|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_DAY_TO_HOUR|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_DAY_TO_MINUTE|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_DAY_TO_SECOND|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_HOUR_TO_MINUTE|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_HOUR_TO_SECOND|\c date(relative)|direct conversion
+    |\c SQL_INTERVAL_MINUTE_TO_SECOND|\c date(relative)|direct conversion
+    |\c SQL_GUID|\c string|format: <tt>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</tt> (canonical UUID form)
+*/

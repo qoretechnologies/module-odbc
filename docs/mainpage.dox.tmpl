@@ -31,7 +31,7 @@
     the %Qore library was initialized).
 
     Example of creating an ODBC Datasource using DSN-less connection:
-    @code
+    @code{.py}
 # Firebird
 Datasource db("odbc:user/pass@{conn=driver=firebird;dbname=localhost:/var/lib/firebird/data/employee.fdb}");
 
@@ -53,7 +53,7 @@ db = new Datasource(SQL::DSODBC, user, pass, NOTHING, NOTHING, NOTHING,
     @endcode
 
     Example of creating an ODBC Datasource using DSN connection:
-    @code
+    @code{.py}
 Datasource db(SQL::DSODBC, user, pass, dsn, "UTF8");
     @endcode
 
@@ -109,61 +109,8 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     @section odbcoptions Driver Options
 
-    The odbc driver supports the following DBI options:
-    - \c "bigint-native": bind Qore int values as native \c SQL_C_SBIGINT values to ODBC statements; this is the
-      default
-    - \c "bigint-string": bind Qore int values as \c SQL_C_CHAR values (strings) to ODBC statements
-    - \c "conn": the ODBC connection string (ex: \c "driver=xyz;server=abc" etc)
-    - \c "fractional-precision": precision to use for the fractional seconds part of date, time, timestamp and
-      interval values; in the range 1-9 (default is 3)
-    - \c "login-timeout": timeout value in seconds used for logging in to the connection (connecting); possible values
-      are integers from 0 up (default is 60); setting the timeout to 0 means to wait indefinitely
-    - \c "connection-timeout": timeout value in seconds used for the connection; possible values are integers from 0
-      up (default is 60); setting the timeout to 0 means to wait indefinitely
-    - \c "numeric-numbers": return received \c SQL_NUMERIC and \c SQL_DECIMAL values as arbitrary-precision numbers
-      (Qore number values)
-    - \c "optimal-numbers": return received \c SQL_NUMERIC and \c SQL_DECIMAL values as integers if possible, if not
-      return them as an arbitrary-precision numbers; this is the default
-    - \c "preserve-case": the case of column names will be preserved; by default this is disabled and column names
-      are converted to lower-case
-    - \c "qore-timezone": accepts a string argument that can be either a region name (ex: \c "Europe/Prague") or a UTC
-      offset (ex: \c "+01:00") to set the server's timezone rules; this is useful if connecting to a database server
-      in a different timezone; if this option is not set then the server's timezone is assumed to be the same as the
-      client's timezone
-    - \c "string-numbers": return received \c SQL_NUMERIC and \c SQL_DECIMAL values as strings (for backwards-
-      compatibility)
+    @subpage odbcoptionsguide
 
-    Options can be set in the \c Datasource or \c DatasourcePool constructors as in the following examples:
-    @code
-    Datasource ds("odbc:user/pass@dsn{numeric-numbers}");
-    DatasourcePool dsp("odbc:user/pass@{optimal-numbers,conn-DRIVER=MySQL ODBC 5.3 Unicode Driver;Server=192.168.20.1;Database=omquser}");
-    @endcode
-
-    Options are stored separately for each connection.
-
-    @warning In order to use \c int parameters in commands for the Oracle database, you either need to set the \c "bigint-string" option so that Qore int values are sent as strings instead of as 64bit int values (\c SQL_C_SBIGINT), or you have to bind integer values using \ref Qore::odbc::odbc_bind "odbc_bind()" and the \ref odbc_bind_constants "odbc_bind() constants" \c ODBCT_SLONG, \c ODBCT_ULONG, \c ODBCT_SSHORT, \c ODBCT_USHORT, \c ODBCT_STINYINT or \c ODBCT_UTINYINT, and make sure that the integers fit the limits imposed by these types.
-
-    @subsection odbc_number_options Number Options
-
-    The number options (\c "optimal-numbers", \c "string-numbers" and \c "numeric-numbers") are all mutually-exclusive; setting one automatically disables the others. These options also ignore their arguments; the last one set takes effect (also note that setting it with any value sets the option, even False).
-
-    The default if no other option is explicitly set is \c "optimal-numbers".  Note that this represents a change from previous versions where \c NUMERIC or \c DECIMAL values were returned as strings in order to avoid the loss of information.  To set the old behavior, set the \c "string-numbers" option when creating the \c Datasource or \c DatasourcePool object.
-
-    @subsection odbc_bigint_options Bigint Options
-
-    The bigint options (\c "bigint-native" and \c "bigint-string") are mutually-exclusive; setting one automatically disables the other. These options also ignore their arguments; the last one set takes effect (also note that setting it with any value sets the option, even False).
-
-    The default if no other option is explicitly set is \c "bigint-native".
-
-    @subsection odbc_frprec_option Fractional Precision Option
-
-    This option sets how big fractional seconds precision will be used when binding any date, time, timestamp and/or interval parameter with seconds part. The default value is 3. Possible values are 1 to 9.
-
-    @subsection odbc_timeout_options Login Timeout and Connection Timeout Options
-
-    Login timeout option is used to set for how long the ODBC driver should wait during the initial connection phase. Connection timeout option is used to set the timeout for when the connection is open and it stops responding.
-
-    Both of the options have a default value of 60 and can be set to numbers ranging from 0 up. A value of 0 means to wait indefinitely (never time out). Both \c Qore int values and integers in the form of strings can be used to set these options.
 
     @section odbctrans Transaction Management
 
@@ -173,325 +120,26 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     @section odbcexceptions Exception Types and Error Handling
 
-    The ODBC driver raises various exceptions to indicate error conditions. Understanding these exceptions helps in writing robust error handling code.
+    @subpage odbcexceptionsguide
 
-    @subsection odbc_connection_errors Connection Errors
-
-    |!Exception|!Description|!Common Causes|!Resolution
-    |\c ODBC-CONNECTION-ERROR|Connection to the database failed|Invalid credentials, server unavailable, network issues, incorrect connection string|Verify connection string, credentials, network connectivity, and that the database server is running
-    |\c ODBC-CONNECTION-HANDLE-ERROR|Cannot allocate a connection handle|Resource exhaustion, ODBC driver issues|Check ODBC driver configuration, restart application
-    |\c ODBC-CONNECTION-DEAD-ERROR|The database connection has been lost|Network failure, server restart, idle timeout|Reconnect to the database; consider using connection pooling with health checks
-    |\c ODBC-ENV-HANDLE-ERROR|Cannot allocate an environment handle|ODBC driver not installed or misconfigured|Install/reinstall the ODBC driver, check odbcinst.ini configuration
-    |\c ODBC-NO-CONNECTION-ERROR|Operation attempted without an open connection|Calling database methods before connecting or after disconnection|Ensure connection is established before executing operations
-
-    @subsection odbc_statement_errors Statement Errors
-
-    |!Exception|!Description|!Common Causes|!Resolution
-    |\c ODBC-EXEC-ERROR|SQL statement execution failed|SQL syntax error, constraint violation, permission denied|Check SQL syntax, verify table/column names, check database permissions
-    |\c ODBC-PREPARE-ERROR|Failed to prepare SQL statement|Invalid SQL syntax, referenced objects don't exist|Validate SQL syntax, ensure all referenced tables and columns exist
-    |\c ODBC-PARSE-ERROR|Invalid SQL specification|Malformed SQL, invalid placeholder syntax|Check SQL syntax and placeholder formatting
-    |\c ODBC-STATEMENT-ALLOC-ERROR|Cannot allocate a statement handle|Resource exhaustion, too many open statements|Close unused statements, check for statement handle leaks
-    |\c ODBC-FETCH-ERROR|Error fetching data from result set|Connection lost during fetch, data conversion error|Check connection stability, verify data type compatibility
-    |\c ODBC-SELECT-ROW-ERROR|selectRow() returned more than one row|Query returned multiple rows when only one was expected|Add LIMIT 1 to query or refine WHERE clause to ensure single row result
-
-    @subsection odbc_binding_errors Binding Errors
-
-    |!Exception|!Description|!Common Causes|!Resolution
-    |\c ODBC-BIND-ERROR|Invalid parameter binding|Invalid type constant passed to odbc_bind(), type mismatch|Use valid ODBCT_* constants, ensure parameter types match column types
-    |\c ODBC-BIND-PLACEHOLDERS-ERROR|Placeholder binding not supported|Calling bindPlaceholders() which is not supported by ODBC driver|Use bindArgs() or bind() instead of bindPlaceholders()
-
-    @subsection odbc_transaction_errors Transaction Errors
-
-    |!Exception|!Description|!Common Causes|!Resolution
-    |\c ODBC-COMMIT-ERROR|Transaction commit failed|Connection lost, database constraint violation during commit|Check connection, verify all data meets constraints, retry transaction
-    |\c ODBC-ROLLBACK-ERROR|Transaction rollback failed|Connection lost during rollback|Reconnect to database; the transaction should be automatically rolled back by the server
-    |\c ODBC-TRANSACTION-ERROR|Connection lost during active transaction|Network failure, server restart|Reconnect and retry the transaction
-
-    @subsection odbc_option_errors Option Errors
-
-    |!Exception|!Description|!Common Causes|!Resolution
-    |\c ODBC-OPTION-ERROR|Invalid option value|Wrong data type for option, value out of range|Check option documentation for valid types and ranges
-
-    @subsection odbc_error_handling_example Error Handling Example
-
-    @code
-    try {
-        Datasource ds("odbc:user/pass@dsn");
-
-        try {
-            ds.exec("INSERT INTO users (id, name) VALUES (%v, %v)", 1, "Test");
-            ds.commit();
-        } catch (hash<ExceptionInfo> ex) {
-            # Handle execution errors
-            if (ex.err == "ODBC-EXEC-ERROR") {
-                printf("SQL execution failed: %s\n", ex.desc);
-            }
-            ds.rollback();
-        }
-    } catch (hash<ExceptionInfo> ex) {
-        # Handle connection errors
-        if (ex.err == "ODBC-CONNECTION-ERROR") {
-            printf("Could not connect to database: %s\n", ex.desc);
-        } else if (ex.err == "ODBC-ENV-HANDLE-ERROR") {
-            printf("ODBC driver issue: %s\n", ex.desc);
-        }
-    }
-    @endcode
 
     @section odbcbind Binding and Types
 
-    Apart from simply passing values for binding you can also use the \ref Qore::odbc::odbc_bind "odbc_bind()" function to specify the type to bind. See \ref odbc_binding_by_value for more information about how types are bound when binding by value with this driver.
+    @subpage odbcbindguide
 
-    For \c NUMERIC columns, the %d specification in the query string can be used to substitute a numeric value or a literal null directly in the query string, providing the same effect as a bind by value in a very convenient form for the programmer. For example:
-
-    @code
-# the %d will be substituted with the value of \c id directly in the query text
-# or with a "null" in case \c id has no value (or is NULL)
-*hash results = db.select("select * from table where id = %d", id);
-    @endcode
-
-    Note that binding by placeholder is not required or supported by this driver; Qore DBI placeholder buffer specifications are ignored when the ODBC driver is used.
-
-    When binding arrays, all data types in the Qore list must be identical.
-
-    When retrieving ODBC data, ODBC types are converted to Qore types as per \ref odbc_to_qore.
-
-    @subsection odbc_timezone Timezone Support
-
-    The driver now sets the server's time zone rules when the connection is established; this is taken from the current time zone settings of the calling Program object and can also be overridden/changed by setting the \c "qore-timezone" driver option (see @ref odbcoptions).
-
-    All date/time values bound by value are converted to the server's time zone before binding to ensure that date/time values are stored correctly in the server.
-
-    When selecting date/time values, the values returned are tagged with the server's time zone.
-
-    Note that the above rules are applied when the current Program's time zone settings are different than the connection's time zone settings at the time when the write operation (bind) read operation (select) is performed.  This is meant to provide consistent support to connecting to a database server in a different time zone.
-
-    @subsection odbc_encoding_support Character Encoding Support
-
-    The \c odbc module uses the datasource encoding to transfer strings to and from databases in all cases.
-    Conversions are made to the datasource encoding for strings inbound to the DB, if necessary, and all string data
-    retrieved from the DB is tagged with the datasource's encoding as well.
-
-    @subsection odbc_oracle_support Oracle Support
-
-    User of this module can use it to connect to Oracle databases. There is one issue however which is connected to this. This module binds \c Qore int values as \c SQL_C_SBIGINT datatype by default. This does not work with Oracle databases though. To overcome this problem, there are two options:
-
-    1) Use the \c "bigint-string" option when opening an ODBC connection. This causes all \c Qore integer values to be bound and sent to the DB as strings. It is less efficient than binding as bigints but works.
-
-    2) Make sure that the integer values fit the respective numerical limits and use \ref Qore::odbc::odbc_bind "odbc_bind()" to bind the integer values as one of the following ODBC datatypes: \c SQL_C_SLONG, \c SQL_C_ULONG, \c SQL_C_SSHORT, \c SQL_C_USHORT, \c SQL_C_STINYINT or \c SQL_C_UTINYINT.
-
-    @see odbc_bind_constants
-
-    @subsection odbc_binding_by_value Binding By Value
-
-    The following table gives data mapping when binding qore types by value.
-
-    |!QoreType|!ODBC C Type|!ODBC SQL Type|!Description
-    |\c int|\c SQL_C_SBIGINT, \c SQL_C_CHAR|\c SQL_BIGINT|Converting from a BIGINT type to smaller integer types is \
-        done automatically by the specific ODBC DB driver. Qore ints can be bound either as SQL_C_SBIGINT values \
-        (default) or as character strings (needed for Oracle database).
-    |\c float|\c SQL_C_DOUBLE|\c SQL_DOUBLE|Qore float data is converted directly to ODBC DOUBLE data.
-    |\c number|\c SQL_C_CHAR|\c SQL_CHAR|Qore number data is converted to strings before sending.
-    |\c string|\c SQL_C_CHAR, \c SQL_C_WCHAR|\c SQL_CHAR, \c SQL_WCHAR|The character encoding is converted to UTF-8 \
-        if necessary and bound as SQL_CHAR values
-    |\c bool|\c SQL_C_BIT|\c SQL_CHAR|Qore boolean values are sourced as BIT values and sent as CHAR values.
-    |\c date|\c SQL_C_INTERVAL_DAY_TO_SECOND, \c SQL_C_TYPE_TIMESTAMP|\c SQL_INTERVAL_DAY_TO_SECOND, \
-        \c SQL_TYPE_TIMESTAMP|Relative date/time values are bound as interval data, absolute date/time values are \
-        bound as timestamp data
-    |\c binary|\c SQL_C_BINARY|\c SQL_BINARY|Qore binary data is bound directly as binary data.
-
-    @subsection odbc_to_qore ODBC to Qore Type Mappings
-
-    |!ODBC Type|!Qore Type|!Notes
-    |\c SQL_BIT|\c bool|direct conversion
-    |\c SQL_BINARY|\c binary|direct conversion
-    |\c SQL_VARBINARY|\c binary|direct conversion
-    |\c SQL_LONGVARBINARY|\c binary|direct conversion
-    |\c SQL_CHAR|\c string|direct conversion as UTF-8-encoded strings
-    |\c SQL_VARCHAR|\c string|direct conversion as UTF-8-encoded strings
-    |\c SQL_LONGVARCHAR|\c string|direct conversion as UTF-8-encoded strings
-    |\c SQL_WCHAR|\c string|direct conversion as UTF-8-encoded strings
-    |\c SQL_WVARCHAR|\c string|direct conversion as UTF-8-encoded strings
-    |\c SQL_WLONGVARCHAR|\c string|direct conversion as UTF-8-encoded strings
-    |\c SQL_INTEGER|\c int|direct conversion
-    |\c SQL_BIGINT|\c int|direct conversion
-    |\c SQL_SMALLINT|\c int|direct conversion
-    |\c SQL_TINYINT|\c int|direct conversion
-    |\c SQL_FLOAT|\c float|direct conversion
-    |\c SQL_DOUBLE|\c float|direct conversion
-    |\c SQL_REAL|\c float|direct conversion
-    |\c SQL_NUMERIC|\c int, \c string or \c number|depends on driver options
-    |\c SQL_DECIMAL|\c int, \c string or \c number|depends on driver options
-    |\c SQL_TYPE_DATE|\c date (absolute)|direct conversion
-    |\c SQL_TYPE_TIME|\c date (relative)|direct conversion
-    |\c SQL_TYPE_TIMESTAMP|\c date (absolute)|direct conversion
-    |\c SQL_TYPE_UTCDATETIME| |not supported
-    |\c SQL_TYPE_UTCTIME| |not supported
-    |\c SQL_INTERVAL_MONTH|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_YEAR|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_YEAR_TO_MONTH|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_DAY|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_HOUR|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_MINUTE|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_SECOND|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_DAY_TO_HOUR|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_DAY_TO_MINUTE|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_DAY_TO_SECOND|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_HOUR_TO_MINUTE|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_HOUR_TO_SECOND|\c date(relative)|direct conversion
-    |\c SQL_INTERVAL_MINUTE_TO_SECOND|\c date(relative)|direct conversion
-    |\c SQL_GUID|\c string|format: <tt>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</tt> (canonical UUID form)
 
     @section odbcschema Schema Introspection Functions
 
-    The ODBC module provides functions for querying database schema metadata using ODBC catalog functions.
+    @subpage odbcschemaguide
 
-    @subsection odbc_schema_tables odbc_get_tables()
-
-    Returns a list of tables in the database.
-
-    @code
-    list<hash<auto>> tables = odbc_get_tables(ds);
-    # With optional filters:
-    list<hash<auto>> tables = odbc_get_tables(ds, catalog, schema, table_pattern, type);
-    @endcode
-
-    Each hash in the returned list contains: \c catalog, \c schema, \c name, \c type, \c remarks.
-
-    @subsection odbc_schema_columns odbc_get_columns()
-
-    Returns column metadata for a table.
-
-    @code
-    list<hash<auto>> columns = odbc_get_columns(ds, "users");
-    # With optional filters:
-    list<hash<auto>> columns = odbc_get_columns(ds, "users", catalog, schema, column_pattern);
-    @endcode
-
-    Each hash contains: \c catalog, \c schema, \c table, \c name, \c type, \c type_name, \c size, \c decimal_digits, \c nullable, \c remarks, \c default, \c ordinal_position.
-
-    @subsection odbc_schema_primary_keys odbc_get_primary_keys()
-
-    Returns primary key information for a table.
-
-    @code
-    list<hash<auto>> pk = odbc_get_primary_keys(ds, "users");
-    @endcode
-
-    Each hash contains: \c catalog, \c schema, \c table, \c column, \c key_seq, \c pk_name.
-
-    @subsection odbc_schema_foreign_keys odbc_get_foreign_keys()
-
-    Returns foreign key relationships for a table.
-
-    @code
-    list<hash<auto>> fks = odbc_get_foreign_keys(ds, "orders");
-    @endcode
-
-    Each hash contains: \c pk_catalog, \c pk_schema, \c pk_table, \c pk_column, \c fk_catalog, \c fk_schema, \c fk_table, \c fk_column, \c key_seq, \c update_rule, \c delete_rule, \c fk_name, \c pk_name.
-
-    @subsection odbc_schema_indexes odbc_get_indexes()
-
-    Returns index information for a table.
-
-    @code
-    list<hash<auto>> indexes = odbc_get_indexes(ds, "users");
-    # Get only unique indexes:
-    list<hash<auto>> unique_indexes = odbc_get_indexes(ds, "users", True);
-    @endcode
-
-    Each hash contains: \c catalog, \c schema, \c table, \c non_unique, \c index_name, \c type, \c ordinal_position, \c column, \c asc_or_desc, \c cardinality, \c pages.
-
-    @subsection odbc_schema_procedures odbc_get_procedures()
-
-    Returns stored procedures in the database.
-
-    @code
-    list<hash<auto>> procs = odbc_get_procedures(ds);
-    @endcode
-
-    Each hash contains: \c catalog, \c schema, \c name, \c num_input_params, \c num_output_params, \c num_result_sets, \c remarks, \c type.
-
-    @subsection odbc_schema_type_info odbc_get_type_info()
-
-    Returns supported SQL data types.
-
-    @code
-    list<hash<auto>> types = odbc_get_type_info(ds);
-    @endcode
-
-    Each hash contains information about supported data types including \c type_name and \c data_type.
 
     @section odbcstoredprocs Stored Procedures
 
-    Stored procedure execution is supported; the following is an example of a stored procedure call:
+    @subpage odbcstoredprocsguide
 
-    Example PostgreSQL PLPG/SQL function:
-    @code
-create or replace function int_test(val int4) returns int4 as $$
-begin
-    return val * 2;
-end;
-$$ language plodbc;
-    @endcode
-
-    Example Qore code to call this function:
-    @code
-auto result = db.exec("select int_test(%v)", 11);
-printf("%N\n", result);
-    @endcode
-
-    Resulting in:
-    @verbatim
-hash: (1 member)
-  int_test : 22
-    @endverbatim
 
     @section odbcreleasenotes Release Notes
 
-    - API documentation uses the public QPP declarations and the driver overview
-      without exposing implementation headers
+    @subpage odbcreleasenotesguide
 
-    @subsection odbcv1_2_0 odbc Driver Version 1.2.0
-    - fixed a security bug where the connection password was leaked in the \c ODBC-CONNECTION-ERROR
-      exception message; password values in the connection string are now masked in error messages
-    - added support for returning the ODBC driver name in \c Datasource::getDriverRealName()
-      (<a href="https://github.com/qorelanguage/qore/issues/4690">issue 4690</a>)
-    - added schema introspection functions: \c odbc_get_tables(), \c odbc_get_columns(),
-      \c odbc_get_primary_keys(), \c odbc_get_foreign_keys(), \c odbc_get_indexes(),
-      \c odbc_get_procedures(), \c odbc_get_type_info()
-    - fixed bug where \c getOption() returned swapped values for \c login-timeout and \c connection-timeout
-    - fixed wrong error message when setting invalid \c connection-timeout option
-    - fixed missing return statements after validation errors in \c setOption()
-    - fixed \c assert() instead of proper null check in \c odbc_get_driver_real_name()
-    - added columnar DBI result support with \c Datasource::selectColumnar() and
-      \c SQLStatement::fetchColumnar() when built against %Qore with columnar DBI APIs
-    - optimized columnar DBI results to return dense buffers for integer, floating-point,
-      and safe \c SQL_NUMERIC / \c SQL_DECIMAL columns
-
-    @subsection odbcv1_1_3 odbc Driver Version 1.1.3
-    - fixed handling retrieving 0-length \c VARCHAR values
-      (<a href="https://github.com/qorelanguage/qore/issues/4681">issue 4681</a>)
-
-    @subsection odbcv1_1_2 odbc Driver Version 1.1.2
-    - update to fix builds with the updated \c qpp from %Qore
-
-    @subsection odbcv1_1_1 odbc Driver Version 1.1.1
-    - fixed a bug iterating result sets with the \c SQLStatement class
-      (<a href="https://github.com/qorelanguage/qore/issues/4616">issue 4616</a>)
-    - fixed handling character encoding issues; strings are bound and retrieved using the DB encoding for the
-      datasource; eliminated special logic for handling UTF-16 strings that caused crashes in some cases
-      (<a href="https://github.com/qorelanguage/qore/issues/4615">issue 4615</a>)
-    - fixed a bug where the \c conn option would be used to build the connection, but the value was not returned as an
-      option value
-      (<a href="https://github.com/qorelanguage/qore/issues/4613">issue 4613</a>)
-
-    @subsection odbcv1_1 odbc Driver Version 1.1
-    - automatically strip trailing spaces from \c CHAR column values
-      (<a href="https://github.com/qorelanguage/qore/issues/4508">issue 4508</a>)
-    - updated to run with the latest unixODBC versions
-      (<a href="https://github.com/qorelanguage/qore/issues/4507">issue 4507</a>)
-
-    @subsection odbcv1_0 odbc Driver Version 1.0
-    - initial release
 */

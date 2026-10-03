@@ -1,0 +1,84 @@
+/* Copyright (C) 2026 Qore Technologies, s.r.o. */
+
+/** @page odbcschemaguide Schema Introspection Functions
+
+    @tableofcontents
+
+    The ODBC module provides functions for querying database schema metadata using ODBC catalog functions.
+
+    @section odbc_schema_tables odbc_get_tables()
+
+    Returns a list of tables in the database.
+
+    @code{.py}
+    list<hash<auto>> tables = odbc_get_tables(ds);
+    # With optional filters:
+    list<hash<auto>> tables = odbc_get_tables(ds, catalog, schema, table_pattern, type);
+    @endcode
+
+    Each hash in the returned list contains: \c catalog, \c schema, \c name, \c type, \c remarks.
+
+    @section odbc_schema_columns odbc_get_columns()
+
+    Returns column metadata for a table.
+
+    @code{.py}
+    list<hash<auto>> columns = odbc_get_columns(ds, "users");
+    # With optional filters:
+    list<hash<auto>> columns = odbc_get_columns(ds, "users", catalog, schema, column_pattern);
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c table, \c name, \c type, \c type_name, \c size, \c decimal_digits, \c nullable, \c remarks, \c default, \c ordinal_position.
+
+    @section odbc_schema_primary_keys odbc_get_primary_keys()
+
+    Returns primary key information for a table.
+
+    @code{.py}
+    list<hash<auto>> pk = odbc_get_primary_keys(ds, "users");
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c table, \c column, \c key_seq, \c pk_name.
+
+    @section odbc_schema_foreign_keys odbc_get_foreign_keys()
+
+    Returns foreign key relationships for a table.
+
+    @code{.py}
+    list<hash<auto>> fks = odbc_get_foreign_keys(ds, "orders");
+    @endcode
+
+    Each hash contains: \c pk_catalog, \c pk_schema, \c pk_table, \c pk_column, \c fk_catalog, \c fk_schema, \c fk_table, \c fk_column, \c key_seq, \c update_rule, \c delete_rule, \c fk_name, \c pk_name.
+
+    @section odbc_schema_indexes odbc_get_indexes()
+
+    Returns index information for a table.
+
+    @code{.py}
+    list<hash<auto>> indexes = odbc_get_indexes(ds, "users");
+    # Get only unique indexes:
+    list<hash<auto>> unique_indexes = odbc_get_indexes(ds, "users", True);
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c table, \c non_unique, \c index_name, \c type, \c ordinal_position, \c column, \c asc_or_desc, \c cardinality, \c pages.
+
+    @section odbc_schema_procedures odbc_get_procedures()
+
+    Returns stored procedures in the database.
+
+    @code{.py}
+    list<hash<auto>> procs = odbc_get_procedures(ds);
+    @endcode
+
+    Each hash contains: \c catalog, \c schema, \c name, \c num_input_params, \c num_output_params, \c num_result_sets, \c remarks, \c type.
+
+    @section odbc_schema_type_info odbc_get_type_info()
+
+    Returns supported SQL data types.
+
+    @code{.py}
+    list<hash<auto>> types = odbc_get_type_info(ds);
+    @endcode
+
+    Each hash contains information about supported data types including \c type_name and \c data_type.
+*/
