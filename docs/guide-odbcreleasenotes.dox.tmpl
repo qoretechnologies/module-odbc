@@ -4,23 +4,32 @@
 
     @tableofcontents
 
-    @section odbcv1_2_0 odbc Driver Version 1.2.0
+    @anchor odbcv1_2_0
+    @section odbcv2_0_0 odbc Driver Version 2.0.0
 
-    - API documentation uses the public QPP declarations and the driver overview
-      without exposing implementation headers
+    @subsection odbcv2_overview Overview
 
-    - fixed a security bug where the connection password was leaked in the \c ODBC-CONNECTION-ERROR
-      exception message; password values in the connection string are now masked in error messages
-    - added support for returning the ODBC driver name in \c Datasource::getDriverRealName()
+    Version 2.0 adds native typed and columnar query results and improves connection diagnostics.
+    See @ref odbccapabilitiesguide for driver capabilities and @ref odbcschemaguide for result metadata.
+
+    @subsection odbcv2_features New Features
+
+    - Return the underlying ODBC driver name with @ref Qore::SQL::Datasource::getDriverRealName() "Datasource::getDriverRealName()"
       (<a href="https://github.com/qorelanguage/qore/issues/4690">issue 4690</a>)
-    - fixed bug where \c getOption() returned swapped values for \c login-timeout and \c connection-timeout
-    - fixed wrong error message when setting invalid \c connection-timeout option
-    - fixed missing return statements after validation errors in \c setOption()
-    - fixed \c assert() instead of proper null check in \c odbc_get_driver_real_name()
-    - added columnar DBI result support with \c Datasource::selectColumnar() and
-      \c SQLStatement::fetchColumnar() when built against %Qore with columnar DBI APIs
-    - optimized columnar DBI results to return dense buffers for integer, floating-point,
-      and safe \c SQL_NUMERIC / \c SQL_DECIMAL columns
+    - Native typed results through @ref Qore::SQL::Datasource::selectTyped() "Datasource::selectTyped()" and
+      @ref Qore::SQL::Datasource::selectRowsTyped() "Datasource::selectRowsTyped()" when built with the corresponding Qore APIs
+    - Columnar results through @ref Qore::SQL::Datasource::selectColumnar() "Datasource::selectColumnar()" and
+      @ref Qore::SQL::SQLStatement::fetchColumnar() "SQLStatement::fetchColumnar()" when built with columnar Qore APIs,
+      including dense buffers for integer, floating-point, and safe numeric/decimal columns
+
+    @subsection odbcv2_fixes Bug Fixes
+
+    - Mask connection passwords in \c ODBC-CONNECTION-ERROR exception messages
+    - Correct swapped \c login-timeout and \c connection-timeout values returned by
+      @ref Qore::SQL::Datasource::getOption() "Datasource::getOption()"
+    - Correct the error message for an invalid \c connection-timeout option and stop processing after validation
+      failures in @ref Qore::SQL::Datasource::setOption() "Datasource::setOption()"
+    - Handle missing driver-name information safely in @ref Qore::SQL::Datasource::getDriverRealName() "Datasource::getDriverRealName()"
 
     @section odbcv1_1_3 odbc Driver Version 1.1.3
     - fixed handling retrieving 0-length \c VARCHAR values
@@ -30,7 +39,7 @@
     - update to fix builds with the updated \c qpp from %Qore
 
     @section odbcv1_1_1 odbc Driver Version 1.1.1
-    - fixed a bug iterating result sets with the \c SQLStatement class
+    - fixed a bug iterating result sets with the @ref Qore::SQL::SQLStatement "SQLStatement" class
       (<a href="https://github.com/qorelanguage/qore/issues/4616">issue 4616</a>)
     - fixed handling character encoding issues; strings are bound and retrieved using the DB encoding for the
       datasource; eliminated special logic for handling UTF-16 strings that caused crashes in some cases

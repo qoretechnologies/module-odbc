@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.5...3.31)
 
 project(qore-odbc-module)
 
-set (VERSION_MAJOR 1)
-set (VERSION_MINOR 2)
+set (VERSION_MAJOR 2)
+set (VERSION_MINOR 0)
 set (VERSION_PATCH 0)
 
 set(PROJECT_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
@@ -49,6 +49,7 @@ add_custom_target(QPP_GENERATED_FILES DEPENDS ${QPP_SOURCES})
 set(module_name "odbc")
 
 set(QORE_DOX_TMPL_SRC
+    docs/guide-odbccapabilities.dox.tmpl
   docs/mainpage.dox.tmpl
     docs/guide-odbcbind.dox.tmpl
     docs/guide-odbcexceptions.dox.tmpl
@@ -73,6 +74,7 @@ endif()
 
 set(MODULE_DOX_INPUT ${CMAKE_CURRENT_BINARY_DIR}/mainpage.dox ${QPP_DOX})
 list(APPEND MODULE_DOX_INPUT
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbccapabilities.dox
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcbind.dox
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcexceptions.dox
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcoptions.dox

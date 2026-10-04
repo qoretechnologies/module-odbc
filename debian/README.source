@@ -38,10 +38,10 @@ dh_strip is appropriate.
 Source and binary builds
 ------------------------
 
-Use a fresh version for every changed upload. This snapshot follows the 1.2.0
+Use a fresh version for every changed upload. This snapshot follows the 2.0.0
 release. From a clean committed checkout:
 
-    version=1.2.0+git20260928.1
+    version=2.0.0~git20261004.1
     mkdir -p ../odbc-package-work
     git archive --format=tar --prefix="qore-odbc-module-$version/" \
         HEAD -- . ':!debian' | xz > \

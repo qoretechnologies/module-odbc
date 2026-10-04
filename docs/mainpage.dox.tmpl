@@ -44,35 +44,13 @@ Datasource db(SQL::DSODBC, user, pass, dsn, "UTF8");
     the required connection parameters directly to the \c conn option separated by semicolons (\c ";") as in the above
     examples.
 
-    If a database name if provided in the datasource connection arguments, it is added as the \c DSN option in the
+    If a database name is provided in the datasource connection arguments, it is added as the \c DSN option in the
     ODBC connection string.
 
-    This driver supports the following DBI capabilities:
-    - \c DBI_CAP_TIME_ZONE_SUPPORT
-    - \c DBI_CAP_TRANSACTION_MANAGEMENT
-    - \c DBI_CAP_CHARSET_SUPPORT
-    - \c DBI_CAP_LOB_SUPPORT
-    - \c DBI_CAP_STORED_PROCEDURES
-    - \c DBI_CAP_BIND_BY_VALUE
-    - \c DBI_CAP_HAS_ARRAY_BIND
-    - \c DBI_CAP_HAS_EXECRAW
-    - \c DBI_CAP_HAS_STATEMENT
-    - \c DBI_CAP_HAS_DESCRIBE
-    - \c DBI_CAP_HAS_SELECT_ROW
-    - \c DBI_CAP_HAS_NUMBER_SUPPORT
-    - \c DBI_CAP_HAS_OPTION_SUPPORT
-    - \c DBI_CAP_SERVER_TIME_ZONE
-    - \c DBI_CAP_HAS_COLUMNAR_SELECT
+    The driver supports transactions, bound parameters, and prepared statements.
+    See @ref odbccapabilitiesguide for supported features and their requirements.
 
-    The driver employs efficient binary bindings for all non-text data types and fully supports multidimensional arrays when selecting and binding by value.
-
-    When built against a %Qore library with columnar DBI support, the driver implements
-    \c Datasource::selectColumnar() and \c SQLStatement::fetchColumnar() to return
-    \c Qore::SQL::ColumnarResult objects suitable for DataFrame and analytical workloads.
-    Integer and floating-point columns are returned as dense \c buffer<int64>
-    and \c buffer<float64> values. Safe \c SQL_NUMERIC and \c SQL_DECIMAL
-    columns with precision up to 38 are returned as \c buffer<decimal128> when
-    numeric results are not configured as strings.
+    The driver supports binary parameter bindings and parameter arrays for bulk DML; see @ref odbcbindguide.
 
     The \c Datasource::getServerVersion() method is implemented for this driver and returns an integer giving the major, minor, and sub version numbers in a single integer according to the following formula:
 
@@ -90,6 +68,7 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     @section odbcdocumentation Documentation
 
+    - @subpage odbccapabilitiesguide
     - @anchor odbcoptions @subpage odbcoptionsguide
     - @anchor odbcexceptions @subpage odbcexceptionsguide
     - @anchor odbcbind @subpage odbcbindguide

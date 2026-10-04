@@ -1,3 +1,9 @@
+qore-odbc-module (2.0.0~git20261004.1-0qore1~ubuntu26.04) resolute; urgency=medium
+
+  * Align the upcoming module, documentation, and package version at 2.0.0.
+
+ -- David Nichols <david@qore.org>  Sun, 04 Oct 2026 12:00:00 +0000
+
 qore-odbc-module (1.2.0+git20260928.1-0qore1~ubuntu26.04) resolute; urgency=medium
 
   * Package the native ODBC driver, compiler metadata, docs and example test.

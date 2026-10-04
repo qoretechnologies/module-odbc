@@ -11,7 +11,7 @@
 %bcond_without tests
 %bcond_without docs
 Name: qore-odbc-module
-Version: 1.2.0
+Version: 2.0.0
 Release: 1%{?dist}
 Summary: ODBC database driver for Qore
 License: MIT
@@ -104,6 +104,9 @@ rpm/test-postgres test
 %doc %{_docdir}/%{name}-doc/
 %endif
 %changelog
+* Sun Oct 04 2026 David Nichols <david@qore.org> - 2.0.0-1
+- Align the upcoming module, documentation, and package version at 2.0.0.
+
 * Thu Oct 01 2026 David Nichols <david@qore.org> - 1.2.0-1
 - Package the ODBC driver, metadata and complete public API documentation.
 - Run real PostgreSQL database tests in a private offline cluster.
