@@ -2,9 +2,21 @@
 # Copyright (C) 2026 Qore Technologies, s.r.o.
 # SPDX-License-Identifier: MIT
 set -eu
+if test "$#" -lt 1 || test "$#" -gt 2; then
+    echo "usage: $0 test-directory [--native]" >&2
+    exit 2
+fi
+if test "$#" -eq 2 && test "$2" != --native; then
+    echo "unknown test option: $2" >&2
+    exit 2
+fi
 test -n "${QORE_DB_CONNSTR_ODBC:?run inside the PostgreSQL fixture}"
 module=${QORE_ODBC_BINARY_MODULE:-odbc}
 /usr/bin/qore -b --enable-debug -l "$module" -e 'Datasource db(ENV.QORE_DB_CONNSTR_ODBC); db.open(); db.close();'
 for suite in "$1"/*.qtest; do
     timeout 180 /usr/bin/qore -b --enable-debug -l "$module" "$suite" -v
 done
+if test "${2:-}" = --native; then
+    test -f "$module"
+    python3 -B -W error "$1/native/run-bind-failure.py" "$module"
+fi

@@ -17,6 +17,16 @@ loader.loader.exec_module(fixture)
 
 
 class FixtureTests(unittest.TestCase):
+    def test_suite_arguments_fail_before_requiring_a_database(self):
+        runner = Path(__file__).with_name("run-suites")
+        for args in ([], ["test", "--unknown"], ["test", "--native", "extra"]):
+            with self.subTest(args=args):
+                result = subprocess.run(["sh", str(runner), *args], capture_output=True,
+                                        text=True, env={"PATH": os.environ["PATH"]})
+                self.assertEqual(result.returncode, 2)
+                self.assertTrue("usage:" in result.stderr or "unknown test option:" in result.stderr)
+                self.assertNotIn("QORE_DB_CONNSTR_ODBC", result.stderr)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

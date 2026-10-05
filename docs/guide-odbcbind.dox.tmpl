@@ -105,4 +105,20 @@
     |\c SQL_INTERVAL_HOUR_TO_SECOND|\c date(relative)|direct conversion
     |\c SQL_INTERVAL_MINUTE_TO_SECOND|\c date(relative)|direct conversion
     |\c SQL_GUID|\c string|format: <tt>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</tt> (canonical UUID form)
+    @section odbcnullablearrays Nullable Parameter Arrays
+
+    Array elements can be SQL NULL or NOTHING; both bind as SQL NULL. A scalar
+    NULL or NOTHING is repeated for every row of an array operation. An entirely
+    NULL array is supported, as are empty strings mixed with NULLs. Non-NULL
+    values in a single array must have the same Qore type; absolute and relative
+    dates cannot be mixed.
+
+    @code{.q}
+    SQLStatement stmt(ds);
+    stmt.prepare("INSERT INTO measurements (id, reading) VALUES (%v, %v)");
+    stmt.bindArgs(((1, 2, 3), (1.5, NULL, 0.0)));
+    stmt.exec();
+    stmt.commit();
+    @endcode
+
 */

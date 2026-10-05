@@ -90,7 +90,7 @@ python3 -B -W error rpm/test_postgres_fixture.py -v
 python3 -B -W error test/test_docs.py build -v
 %endif
 export QORE_ODBC_BINARY_MODULE="$PWD/build/odbc-api-$(/usr/bin/qore --latest-module-api).qmod"
-rpm/test-postgres test
+rpm/test-postgres test --native
 %endif
 %files
 %license LICENSE.txt

@@ -11,4 +11,4 @@ fi
 driver=$(rpm -ql "$driver_package" | sed -n '\|/psqlodbcw\.so$|p')
 test -f "$driver"
 bindir=$(dirname -- "$(command -v initdb)")
-exec python3 -B "$fixture_dir/with-postgres.py" --driver "$driver" --bindir "$bindir" -- "$fixture_dir/run-suites" "$1"
+exec python3 -B "$fixture_dir/with-postgres.py" --driver "$driver" --bindir "$bindir" -- "$fixture_dir/run-suites" "$@"

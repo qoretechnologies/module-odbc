@@ -24,6 +24,10 @@
 
     @subsection odbcv2_fixes Bug Fixes
 
+    - Preserve SQL NULL values in all-NULL, floating-point, and boolean parameter arrays
+    - Allocate valid storage for empty-string and empty-binary arrays and scalar broadcasts
+    - Check array buffer size arithmetic and cooperative cancellation while preparing string and binary arrays
+    - Propagate scalar NULL array binding errors immediately; reject mixed absolute/relative date arrays safely
     - Mask connection passwords in \c ODBC-CONNECTION-ERROR exception messages
     - Correct swapped \c login-timeout and \c connection-timeout values returned by
       @ref Qore::SQL::Datasource::getOption() "Datasource::getOption()"

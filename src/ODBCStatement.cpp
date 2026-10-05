@@ -26,6 +26,7 @@
 */
 
 #include "ODBCStatement.h"
+#include "ODBCArraySize.h"
 
 #include <cctype>
 #include <climits>
@@ -1397,8 +1398,13 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
             case NT_STRING: {
                 size_t len;
                 char* cstr = paramHolder.addChars(getCharsFromString(arg, len, xsink));
-                if (*xsink)
+                if (*xsink) {
                     return -1;
+                }
+                if (!cstr) {
+                    xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate string parameter buffer");
+                    return -1;
+                }
                 SQLLEN* indPtr = paramHolder.addLength(len);
                 ret = SQLBindParameter(stmt, i + 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR,
                     len, 0, reinterpret_cast<SQLCHAR*>(cstr), len, indPtr);
@@ -1442,6 +1448,9 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
                     SQLLEN* indPtr = paramHolder.addLength(len);
                     char* cstr = paramHolder.addChars(vh.giveBuffer());
                     ret = SQLBindParameter(stmt, i + 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, len, 0, cstr, len, indPtr);
+                } else {
+                    xsink->raiseException("ODBC-BIND-ERROR", "invalid BIGINT binding option");
+                    return -1;
                 }
                 break;
             }
@@ -1633,7 +1642,9 @@ int ODBCStatement::bindInternArray(const QoreListNode* args, ExceptionSink* xsin
         QoreValue arg = args->retrieveEntry(i).resolveIndirect();
 
         if (arg.isNullOrNothing()) { // Handle NULL argument.
-            bindParamArraySingleValue(i + 1, arg, xsink);
+            if (bindParamArraySingleValue(i + 1, arg, xsink)) {
+                return -1;
+            }
             continue;
         }
 
@@ -1727,28 +1738,35 @@ int ODBCStatement::fetchResultColumnMetadata(ExceptionSink* xsink) {
 
 int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, ExceptionSink* xsink) {
     size_t count = lst->size();
-    bool absoluteDate;
     SQLLEN* indArray;
     SQLRETURN ret;
 
-    // Find out datatype of values in the list.
-    qore_type_t ntype = NT_NULL;
-    for (size_t i = 0; i < count; i++) {
-        // see above: a list element may be an indirect reference
+    // Keep the first actual value, so date classification always uses initialized data.
+    QoreValue first;
+    for (size_t i = 0; i < count; ++i) {
+        if (!(i % 100) && qore_check_cancel(xsink, "classifying ODBC parameter array")) {
+            return -1;
+        }
         QoreValue arg = lst->retrieveEntry(i).resolveIndirect();
-        if (!arg.isNullOrNothing()) {
-            if (ntype == NT_NULL) {
-                ntype = arg.getType();
-                if (ntype == NT_DATE)
-                    absoluteDate = arg.get<const DateTimeNode>()->isAbsolute();
-            }
-            else if (ntype != arg.getType()) { // Different types in the same array -> error.
-                xsink->raiseException("ODBC-BIND-ERROR",
-                    "different datatypes in the same parameter array in column #%d", column);
-                return -1;
-            }
+        if (arg.isNullOrNothing()) {
+            continue;
+        }
+        if (first.isNullOrNothing()) {
+            first = arg;
+        } else if (first.getType() != arg.getType()
+                || (first.getType() == NT_DATE
+                    && first.get<const DateTimeNode>()->isAbsolute()
+                        != arg.get<const DateTimeNode>()->isAbsolute())) {
+            xsink->raiseException("ODBC-BIND-ERROR",
+                "different datatypes in the same parameter array in column #%d", column);
+            return -1;
         }
     }
+    if (first.isNullOrNothing()) {
+        // Reuse the scalar NULL array binder, including its allocation and driver errors.
+        return bindParamArraySingleValue(column, first, xsink);
+    }
+    qore_type_t ntype = first.getType();
 
     switch (ntype) {
         case NT_STRING: {
@@ -1770,7 +1788,7 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
             break;
         }
         case NT_DATE: {
-            if (absoluteDate) {
+            if (first.get<const DateTimeNode>()->isAbsolute()) {
                 TIMESTAMP_STRUCT* array;
                 if (createArrayFromAbsoluteDateList(lst, array, indArray, xsink))
                     return -1;
@@ -1800,6 +1818,9 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
                     return -1;
                 ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_CHAR,
                     SQL_CHAR, maxlen, 0, array, maxlen, indArray);
+            } else {
+                xsink->raiseException("ODBC-BIND-ERROR", "invalid BIGINT binding option");
+                return -1;
             }
             break;
         }
@@ -1808,7 +1829,7 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
             if (createArrayFromFloatList(lst, array, indArray, xsink))
                 return -1;
             ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_DOUBLE,
-                SQL_DOUBLE, DOUBLE_COLSIZE, 0, array, sizeof(double), 0);
+                SQL_DOUBLE, DOUBLE_COLSIZE, 0, array, sizeof(double), indArray);
             break;
         }
         case NT_BOOLEAN: {
@@ -1816,7 +1837,7 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
             if (createArrayFromBoolList(lst, array, indArray, xsink))
                 return -1;
             ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_STINYINT,
-                SQL_TINYINT, 3, 0, array, sizeof(int8_t), 0);
+                SQL_TINYINT, 3, 0, array, sizeof(int8_t), indArray);
             break;
         }
         case NT_BINARY: {
@@ -1828,12 +1849,9 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
                 SQL_BINARY, maxlen, 0, array, maxlen, indArray);
             break;
         }
-        case NT_NULL: {
-            break;
-        }
         default: {
-            assert(false);
-            xsink->raiseException("ODBC-BIND-ERROR", "unknown parameter datatype; this error should never happen...");
+            xsink->raiseException("ODBC-BIND-ERROR", "do not know how to bind array values of type '%s'",
+                first.getTypeName());
             return -1;
         }
     } // switch
@@ -1920,6 +1938,9 @@ int ODBCStatement::bindParamArraySingleValue(int column, QoreValue arg, Exceptio
                 if (createStrArrayFromInt(arg, array, indArray, len, xsink))
                     return -1;
                 ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, len, 0, array, len, indArray);
+            } else {
+                xsink->raiseException("ODBC-BIND-ERROR", "invalid BIGINT binding option");
+                return -1;
             }
             break;
         }
@@ -3506,9 +3527,13 @@ int ODBCStatement::createArrayFromStringList(const QoreListNode* arg, char*& arr
     if (!indArray)
         return -1;
 
-    maxlen = 0;
+    // Empty strings still need addressable storage for the zero-length slot.
+    maxlen = 1;
     size_t arraySize = arrayHolder.getArraySize();
     for (size_t i = 0; i < arraySize; i++) {
+        if (!(i % 100) && qore_check_cancel(xsink, "preparing ODBC parameter array")) {
+            return -1;
+        }
         QoreValue str = arg->retrieveEntry(i);
         if (str.isNullOrNothing()) {
             indArray[i] = SQL_NULL_DATA;
@@ -3526,13 +3551,21 @@ int ODBCStatement::createArrayFromStringList(const QoreListNode* arg, char*& arr
     }
 
     // We have to create one big array and put all the strings in it one after another.
-    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * maxlen)));
+    size_t allocationSize;
+    if (!getArrayStorageSize(arraySize, maxlen, allocationSize)) {
+        xsink->raiseException("ODBC-MEMORY-ERROR", "ODBC parameter array storage size overflow");
+        return -1;
+    }
+    array = paramHolder.addChars(static_cast<char*>(malloc(allocationSize)));
     if (!array) {
-        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
-            arraySize * maxlen);
+        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate array with size of %zu bytes",
+            allocationSize);
         return -1;
     }
     for (size_t i = 0; i < arraySize; i++) {
+        if (!(i % 100) && qore_check_cancel(xsink, "preparing ODBC parameter array")) {
+            return -1;
+        }
         if (indArray[i] == 0 || indArray[i] == SQL_NULL_DATA) {
             array[i*maxlen] = '\0';
             continue;
@@ -3593,9 +3626,13 @@ int ODBCStatement::createArrayFromBinaryList(const QoreListNode* arg, void*& arr
     if (!indArray)
         return -1;
 
-    maxlen = 0;
+    // Empty binary slots still need storage for the NULL placeholder byte.
+    maxlen = 1;
     size_t arraySize = arrayHolder.getArraySize();
     for (size_t i = 0; i < arraySize; i++) {
+        if (!(i % 100) && qore_check_cancel(xsink, "preparing ODBC parameter array")) {
+            return -1;
+        }
         QoreValue bin = arg->retrieveEntry(i);
         if (bin.isNullOrNothing() || !bin.get<const BinaryNode>()->getPtr()) {
             indArray[i] = SQL_NULL_DATA;
@@ -3606,14 +3643,22 @@ int ODBCStatement::createArrayFromBinaryList(const QoreListNode* arg, void*& arr
     }
 
     // We have to create one big array and put all the binaries in it one after another (very inefficient).
-    char* charArray = paramHolder.addChars(static_cast<char*>(malloc(arraySize * maxlen)));
+    size_t allocationSize;
+    if (!getArrayStorageSize(arraySize, maxlen, allocationSize)) {
+        xsink->raiseException("ODBC-MEMORY-ERROR", "ODBC parameter array storage size overflow");
+        return -1;
+    }
+    char* charArray = paramHolder.addChars(static_cast<char*>(malloc(allocationSize)));
     array = static_cast<void*>(charArray);
     if (!array) {
-        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
-            arraySize * maxlen);
+        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate array with size of %zu bytes",
+            allocationSize);
         return -1;
     }
     for (size_t i = 0; i < arraySize; i++) {
+        if (!(i % 100) && qore_check_cancel(xsink, "preparing ODBC parameter array")) {
+            return -1;
+        }
         if (indArray[i] == 0 || indArray[i] == SQL_NULL_DATA) {
             charArray[i*maxlen] = '\0';
             continue;
@@ -3788,16 +3833,32 @@ int ODBCStatement::createArrayFromString(const QoreValue& arg, char*& array, SQL
         return -1;
     size_t arraySize = arrayHolder.getArraySize();
     char* val = paramHolder.addChars(getCharsFromString(arg, len, xsink));
-    if (!val)
+    if (*xsink) {
         return -1;
-    array = paramHolder.addChars(static_cast<char*>(malloc(arraySize * len)));
+    }
+    if (!val) {
+        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate string parameter buffer");
+        return -1;
+    }
+    // Keep the SQL length zero while providing a non-null parameter address.
+    size_t allocationSize;
+    if (!getArrayStorageSize(arraySize, len, allocationSize)) {
+        xsink->raiseException("ODBC-MEMORY-ERROR", "ODBC parameter array storage size overflow");
+        return -1;
+    }
+    array = paramHolder.addChars(static_cast<char*>(malloc(allocationSize)));
     if (!array) {
-        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %ld bytes",
-            arraySize * len);
+        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate array with size of %zu bytes",
+            allocationSize);
         return -1;
     }
     for (size_t i = 0; i < arraySize; i++) {
-        memcpy((array + i*len), val, len);
+        if (!(i % 100) && qore_check_cancel(xsink, "preparing ODBC parameter array")) {
+            return -1;
+        }
+        if (len) {
+            memcpy((array + i*len), val, len);
+        }
         indArray[i] = len;
     }
 
@@ -3837,15 +3898,25 @@ int ODBCStatement::createArrayFromBinary(const BinaryNode* arg, void*& array, SQ
     len = arg->size();
     size_t arraySize = arrayHolder.getArraySize();
     void* val = const_cast<void*>(arg->getPtr());
-    char* charArray = paramHolder.addChars(static_cast<char*>(malloc(arraySize * len)));
+    size_t allocationSize;
+    if (!getArrayStorageSize(arraySize, len, allocationSize)) {
+        xsink->raiseException("ODBC-MEMORY-ERROR", "ODBC parameter array storage size overflow");
+        return -1;
+    }
+    char* charArray = paramHolder.addChars(static_cast<char*>(malloc(allocationSize)));
     if (!charArray) {
-        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate char array with size of %d bytes",
-            arraySize * len);
+        xsink->raiseException("ODBC-MEMORY-ERROR", "could not allocate binary array with size of %zu bytes",
+            allocationSize);
         return -1;
     }
     array = static_cast<void*>(charArray);
     for (size_t i = 0; i < arraySize; i++) {
-        memcpy((charArray + i*len), val, len);
+        if (!(i % 100) && qore_check_cancel(xsink, "preparing ODBC parameter array")) {
+            return -1;
+        }
+        if (len) {
+            memcpy((charArray + i*len), val, len);
+        }
         indArray[i] = len;
     }
 

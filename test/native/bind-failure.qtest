@@ -1,0 +1,32 @@
+#!/usr/bin/env qore
+# Copyright 2026 Qore Technologies, s.r.o.; SPDX-License-Identifier: MIT
+%modern
+%requires QUnit
+%prepend-module-path "${SCRIPT_DIR}/../../build"
+%requires odbc
+%exec-class BindFailureTest
+class BindFailureTest inherits QUnit::Test {
+    constructor() : QUnit::Test("ODBC injected bind failure", "1.0", \ARGV) {
+        addTestCase("stop binding after NULL failure and recover", \check());
+        set_return_value(main());
+    }
+    private check() {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        on_exit ds.close();
+        on_error ds.rollback();
+        ds.exec("CREATE TEMP TABLE bind_fail (value VARCHAR(20), id INTEGER)");
+        ds.commit();
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("INSERT INTO bind_fail VALUES (%v, %v)");
+        assertThrows("ODBC-BIND-ERROR", sub() { stmt.bindArgs((NULL, (1, 2, 3))); stmt.exec(); });
+        stmt.rollback();
+        stmt.prepare("INSERT INTO bind_fail VALUES (%v, %v)");
+        stmt.bindArgs((("a", "b"), (4, 5)));
+        stmt.exec();
+        stmt.commit();
+        assertEq((4, 5), ds.select("SELECT id FROM bind_fail ORDER BY id").id);
+        ds.commit();
+    }
+}

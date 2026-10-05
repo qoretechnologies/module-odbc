@@ -1,0 +1,117 @@
+#!/usr/bin/env qore
+# Copyright 2026 Qore Technologies, s.r.o.; SPDX-License-Identifier: MIT
+%modern
+%requires QUnit
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+%exec-class ArrayBindingTest
+
+class ArrayBindingTest inherits QUnit::Test {
+    constructor() : QUnit::Test("ODBC nullable array binding", "1.0", \ARGV) {
+        addTestCase("all NULL", sub() { check("VARCHAR(20)", (NULL, NULL, NULL), (NULL, NULL, NULL)); });
+        addTestCase("all NOTHING", sub() { check("VARCHAR(20)", (NOTHING, NOTHING, NOTHING), (NULL, NULL, NULL)); });
+        addTestCase("mixed NULL and NOTHING", sub() { check("INTEGER", (NULL, NOTHING, NULL), (NULL, NULL, NULL)); });
+        addTestCase("float NULL indicators", sub() { check("DOUBLE PRECISION", (NULL, 1.5, NOTHING, 0.0, -2.5, NULL), (NULL, 1.5, NULL, 0.0, -2.5, NULL)); });
+        addTestCase("boolean NULL indicators", sub() { check("INTEGER", (NULL, True, NOTHING, False, NULL), (NULL, 1, NULL, 0, NULL)); });
+        addTestCase("integer NULL indicators", sub() { check("BIGINT", (NULL, 9223372036854775807, NOTHING, -2), (NULL, 9223372036854775807, NULL, -2)); });
+        addTestCase("string-bound integer NULL indicators", sub() { check("BIGINT", (NULL, 9223372036854775807, NOTHING, -2), (NULL, 9223372036854775807, NULL, -2), True); });
+        addTestCase("numeric NULL indicators", sub() { check("NUMERIC(6,2)", (NULL, 1.25n, NOTHING, -2.5n), (NULL, 1.25n, NULL, -2.5n)); });
+        addTestCase("string NULL indicators", sub() { check("VARCHAR(20)", (NULL, "", "hello", NOTHING), (NULL, "", "hello", NULL)); });
+        addTestCase("zero-width strings", sub() { check("VARCHAR(20)", ("", NULL, ""), ("", NULL, "")); });
+        addTestCase("binary NULL indicators", sub() { check("BYTEA", (NULL, <bead>, NOTHING, <001122>), (NULL, <bead>, NULL, <001122>)); });
+        addTestCase("empty binary array", sub() { check("BYTEA", (binary(), NULL, binary()), (NULL, NULL, NULL)); });
+        addTestCase("mixed empty binary array", sub() { check("BYTEA", (binary(), <bead>, NULL), (NULL, <bead>, NULL)); });
+        addTestCase("empty binary broadcast", sub() { check("BYTEA", binary(), (binary(), binary(), binary())); });
+        addTestCase("empty string broadcast", sub() { check("VARCHAR(20)", "", ("", "", "")); });
+        addTestCase("date NULL indicators", sub() { check("TIMESTAMP", (NULL, 2026-01-02T03:04:05Z, NOTHING), (NULL, 2026-01-02T03:04:05Z, NULL)); });
+        addTestCase("single NULL element", sub() { check("VARCHAR(20)", (NULL,), (NULL,)); });
+        addTestCase("scalar NULL broadcast", sub() { check("VARCHAR(20)", NULL, (NULL, NULL, NULL)); });
+        addTestCase("scalar NOTHING broadcast", sub() { check("VARCHAR(20)", NOTHING, (NULL, NULL, NULL)); });
+        addTestCase("integer broadcast string option", sub() { check("BIGINT", 9223372036854775807, (9223372036854775807, 9223372036854775807), True); });
+        addTestCase("different array lengths", sub() { check("DOUBLE PRECISION", (1.5,), (1.5, NULL, NULL)); });
+        addTestCase("rebind NULL and typed arrays", \rebind());
+        addTestCase("reject mixed types and recover", sub() { reject((1, "bad")); });
+        addTestCase("reject mixed date kinds and recover", sub() { reject((2026-01-01, 1D)); });
+        addTestCase("reject unsupported array values and recover", sub() { reject((("key": "value"), ("key": "other"))); });
+        addTestCase("reject empty array and recover", sub() { reject(()); });
+        addTestCase("large nullable string array", sub() {
+            list<auto> values = map $1 % 3 ? "value" : NULL, 0 .. 255;
+            check("VARCHAR(20)", values, values);
+        });
+        addTestCase("large nullable binary array", sub() {
+            list<auto> values = map $1 % 3 ? <bead> : NULL, 0 .. 255;
+            check("BYTEA", values, values);
+        });
+        set_return_value(main());
+    }
+
+    private check(string sqlType, auto values, list<auto> expected, bool stringInts = False) {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        on_exit ds.close();
+        on_error ds.rollback();
+        if (stringInts) { ds.setOption("bigint-string", True); }
+        ds.setOption("numeric-numbers", True);
+        ds.setOption("qore-timezone", "UTC");
+        ds.exec("CREATE TEMP TABLE array_null_control (id INTEGER, value " + sqlType + ")");
+        ds.commit();
+        list<int> ids = map $1 + 1, 0 .. (elements expected - 1);
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("INSERT INTO array_null_control VALUES (%v, %v)");
+        stmt.bindArgs((ids, values));
+        stmt.exec();
+        stmt.commit();
+        hash<auto> result = ds.select("SELECT id, value FROM array_null_control ORDER BY id");
+        assertEq(ids, result.id);
+        assertEq(expected, result.value);
+        ds.commit();
+    }
+
+    private rebind() {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        on_exit ds.close();
+        on_error ds.rollback();
+        ds.exec("CREATE TEMP TABLE array_rebind (id INTEGER, value DOUBLE PRECISION)");
+        ds.commit();
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("INSERT INTO array_rebind VALUES (%v, %v)");
+        list<list<auto>> batches = ((1.5, NULL), (NULL, NOTHING, NULL), (NULL,), (2.5, 0.0));
+        int id = 0;
+        list<auto> expected;
+        foreach list<auto> values in (batches) {
+            list<int> ids;
+            foreach auto value in (values) {
+                push ids, ++id;
+                push expected, value === NOTHING ? NULL : value;
+            }
+            stmt.bindArgs((ids, values));
+            stmt.exec();
+            stmt.commit();
+        }
+        assertEq(expected, ds.select("SELECT value FROM array_rebind ORDER BY id").value);
+        ds.commit();
+    }
+
+    private reject(list<auto> bad) {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        on_exit ds.close();
+        on_error ds.rollback();
+        ds.exec("CREATE TEMP TABLE array_reject (value VARCHAR(20))");
+        ds.commit();
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("INSERT INTO array_reject VALUES (%v)");
+        assertThrows("ODBC-BIND-ERROR", sub() { stmt.bindArgs((bad,)); stmt.exec(); });
+        stmt.rollback();
+        stmt.prepare("INSERT INTO array_reject VALUES (%v)");
+        stmt.bindArgs((("ok", "again"),));
+        stmt.exec();
+        stmt.commit();
+        assertEq(("again", "ok"), ds.select("SELECT value FROM array_reject ORDER BY value").value);
+        ds.commit();
+    }
+}
