@@ -1,0 +1,133 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that every bound value reaches the server when many values of the same type are bound in one execution:
+# the driver reads bound values only when the statement is executed, so their storage must not move while later
+# values are bound.
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class ParamBindingTest
+
+class ParamBindingTest inherits QUnit::Test {
+    private {
+        *Datasource ds;
+        string table = sprintf("odbc_params_%d_%d", getpid(), now_us() % 1000000000);
+        # enough values of one type to move storage that grows while values are bound
+        const Count = 40;
+    }
+
+    constructor() : QUnit::Test("ODBC parameter binding", "1.0", \ARGV) {
+        addTestCase("many integers", \integers());
+        addTestCase("many floating-point values", \floats());
+        addTestCase("many strings", \strings());
+        addTestCase("many dates", \dates());
+        addTestCase("one integer in each statement of a batch", \batch());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        *string connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            return;
+        }
+        ds = new Datasource(connstr);
+        ds.open();
+        string driver = ds.getDriverRealName();
+        if (driver != "PostgreSQL" && driver !~ /SQL Server/i) {
+            ds.close();
+            remove ds;
+            return;
+        }
+        ds.setOption("qore-timezone", "UTC");
+        try {
+            ds.exec("drop table " + table);
+            ds.commit();
+        } catch (hash<ExceptionInfo> ex) {
+            ds.rollback();
+        }
+        ds.exec("create table " + table + " (a int)");
+        ds.commit();
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.exec("drop table " + table);
+            ds.commit();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
+        }
+    }
+
+    tearDown() {
+        if (ds) {
+            ds.rollback();
+        }
+    }
+
+    # inserts every value into its own column of the given type in one statement and checks that each one is
+    # stored unchanged
+    private check(string sqlType, list<auto> values) {
+        string valueTable = table + "_v";
+        list<string> columns = map sprintf("c%d", $1), xrange(values.size());
+        ds.exec("create table " + valueTable + " (" + (map $1 + " " + sqlType, columns).join(", ") + ")");
+        ds.commit();
+        on_exit {
+            ds.rollback();
+            ds.exec("drop table " + valueTable);
+            ds.commit();
+        }
+        ds.vexec("insert into " + valueTable + " values (" + (map "%v", columns).join(", ") + ")", values);
+        hash<auto> expected = map {$1: (values[$1.substr(1).toInt()],)}, columns;
+        assertEq(expected, ds.select("select * from " + valueTable));
+    }
+
+    # returns the SQL type for the server
+    private string sqlType(string pgType, string msType) {
+        return ds.getDriverRealName() == "PostgreSQL" ? pgType : msType;
+    }
+
+    integers() {
+        check("bigint", map 1000000 + $1, xrange(Count));
+    }
+
+    floats() {
+        check(sqlType("double precision", "float"), map 0.5 + $1, xrange(Count));
+    }
+
+    strings() {
+        check("varchar(20)", map sprintf("value-%d", $1), xrange(Count));
+    }
+
+    dates() {
+        check(sqlType("timestamp", "datetime2(0)"), map 2026-01-01T00:00:00Z + seconds($1), xrange(Count));
+    }
+
+    batch() {
+        ds.exec("insert into " + table + " values (%v)", (4, 11, 12));
+        # deletes 4 and 11
+        auto rv = ds.exec("insert into " + table + " values (%v); delete from " + table + " where a < %v", 5, 12);
+        # FreeTDS reports only the last row count of a batch with bound parameters
+        if (rv.typeCode() == NT_HASH) {
+            assertEq({"query0": 1, "query1": 3}, rv);
+        } else {
+            assertEq(3, rv);
+        }
+        assertEq(({"a": 12},), ds.selectRows("select a from " + table + " order by a"));
+    }
+}

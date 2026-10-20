@@ -4,7 +4,7 @@
 
     Qore ODBC module
 
-    Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+    Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <vector>
 
 #include <sql.h>
@@ -42,24 +43,24 @@ namespace odbc {
 namespace intern {
 
 //! Class used by @ref ODBCStatement for temporary storage of SQL parameters.
+/** The driver reads bound values and length indicators through the addresses given to SQLBindParameter() when the
+    statement is executed, so the address of a stored value must not change while further values are added: values
+    are kept in std::deque containers, which never move their elements when elements are added at the end.
+ */
 class ParamHolder {
 public:
     DLLLOCAL ParamHolder() {
-        strings.reserve(16);
-        ints8.reserve(8);
-        ints16.reserve(2);
-        ints32.reserve(2);
-        uints8.reserve(2);
-        lengths.reserve(32);
-        dates.reserve(4);
-        timestamps.reserve(4);
-        times.reserve(4);
-        intervals.reserve(4);
     }
     DLLLOCAL ~ParamHolder() { clear(); }
 
+    //! Takes ownership of a buffer allocated with malloc()
     DLLLOCAL char* addChars(char* s) {
-        strings.push_back(s);
+        try {
+            strings.push_back(s);
+        } catch (...) {
+            free(s);
+            throw;
+        }
         return s;
     }
 
@@ -145,28 +146,34 @@ public:
         uints8.clear();
         uints16.clear();
         uints32.clear();
+        int64s.clear();
         floats.clear();
+        doubles.clear();
         lengths.clear();
         dates.clear();
         times.clear();
+        timestamps.clear();
+        intervals.clear();
     }
 
 private:
+    //! malloc()ed buffers; the buffers themselves are bound, not the elements
     std::vector<char*> strings;
-    std::vector<int8_t> ints8;
-    std::vector<int16_t> ints16;
-    std::vector<int32_t> ints32;
-    std::vector<uint8_t> uints8;
-    std::vector<uint16_t> uints16;
-    std::vector<uint32_t> uints32;
-    std::vector<int64> int64s;
-    std::vector<float> floats;
-    std::vector<double> doubles;
-    std::vector<SQLLEN> lengths;
-    std::vector<DATE_STRUCT> dates;
-    std::vector<TIME_STRUCT> times;
-    std::vector<TIMESTAMP_STRUCT> timestamps;
-    std::vector<SQL_INTERVAL_STRUCT> intervals;
+    // values whose addresses are bound: they must not move when values are added
+    std::deque<int8_t> ints8;
+    std::deque<int16_t> ints16;
+    std::deque<int32_t> ints32;
+    std::deque<uint8_t> uints8;
+    std::deque<uint16_t> uints16;
+    std::deque<uint32_t> uints32;
+    std::deque<int64> int64s;
+    std::deque<float> floats;
+    std::deque<double> doubles;
+    std::deque<SQLLEN> lengths;
+    std::deque<DATE_STRUCT> dates;
+    std::deque<TIME_STRUCT> times;
+    std::deque<TIMESTAMP_STRUCT> timestamps;
+    std::deque<SQL_INTERVAL_STRUCT> intervals;
 };
 
 } // namespace intern
