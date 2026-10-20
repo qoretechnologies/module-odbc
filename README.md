@@ -19,7 +19,7 @@ ODBC database driver module for the [Qore programming language](http://qore.org)
 
 ### Build Requirements
 - CMake 3.5 or higher
-- C++11 compatible compiler (GCC, Clang, MSVC)
+- C++17 compatible compiler (GCC, Clang, MSVC), as required by the Qore headers
 - Qore development headers (qore-devel) 1.14 or higher
 - unixODBC development headers (unixODBC-devel)
 - Doxygen (for documentation generation)

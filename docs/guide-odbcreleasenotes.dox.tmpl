@@ -38,6 +38,7 @@
       each parameter set, such as psqlODBC, only the first set's count was returned
     - A program interrupt cancels an execution, a fetch, or a wait for a later result of a batch that is blocked
       on the server (see @ref odbc_cancellation)
+    - Build in C++17 mode, as the %Qore headers require; building from source needs a C++17 compiler
     - Preserve SQL NULL values in all-NULL, floating-point, and boolean parameter arrays
     - Allocate valid storage for empty-string and empty-binary arrays and scalar broadcasts
     - Check array buffer size arithmetic and cooperative cancellation while preparing string and binary arrays
