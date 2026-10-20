@@ -1,0 +1,119 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that a SQLStatement can be executed again while results of its previous execution are still pending.
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class StatementExecTest
+
+class StatementExecTest inherits QUnit::Test {
+    private {
+        *Datasource ds;
+        string table = sprintf("odbc_reexec_%d_%d", getpid(), now_us() % 1000000000);
+    }
+
+    constructor() : QUnit::Test("ODBC SQLStatement re-execution", "1.0", \ARGV) {
+        addTestCase("a statement executes again before its rows are read", \unreadRows());
+        addTestCase("a statement executes again after some of its rows are read", \partlyReadRows());
+        addTestCase("a statement executes again with new arguments", \newArguments());
+        addTestCase("a statement executes again before its later results are read", \pendingResults());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        *string connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            return;
+        }
+        ds = new Datasource(connstr);
+        ds.open();
+        string driver = ds.getDriverRealName();
+        if (driver != "PostgreSQL" && driver !~ /SQL Server/i) {
+            ds.close();
+            remove ds;
+            return;
+        }
+        try {
+            ds.exec("drop table " + table);
+            ds.commit();
+        } catch (hash<ExceptionInfo> ex) {
+            ds.rollback();
+        }
+        ds.exec("create table " + table + " (a int primary key)");
+        ds.exec("insert into " + table + " values (%v)", (1, 2, 3));
+        ds.commit();
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.exec("drop table " + table);
+            ds.commit();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
+        }
+    }
+
+    tearDown() {
+        if (ds) {
+            ds.rollback();
+        }
+    }
+
+    unreadRows() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("select a from " + table + " order by a");
+        stmt.exec();
+        # executes again without reading the rows of the first execution
+        stmt.exec();
+        assertEq(({"a": 1}, {"a": 2}, {"a": 3}), stmt.fetchRows());
+    }
+
+    partlyReadRows() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("select a from " + table + " order by a");
+        stmt.exec();
+        assertEq(({"a": 1},), stmt.fetchRows(1));
+        stmt.exec();
+        assertEq(({"a": 1}, {"a": 2}, {"a": 3}), stmt.fetchRows());
+    }
+
+    newArguments() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("select a from " + table + " where a >= %v order by a");
+        stmt.bindArgs((2,));
+        stmt.exec();
+        stmt.bindArgs((3,));
+        stmt.exec();
+        assertEq(({"a": 3},), stmt.fetchRows());
+    }
+
+    pendingResults() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("select a from " + table + " where a = 1; update " + table + " set a = a where a = 2");
+        stmt.exec();
+        stmt.exec();
+        assertEq(({"a": 1},), stmt.fetchRows());
+        # the connection is free for other statements
+        assertEq({"x": (1,)}, ds.select("select 1 as x"));
+    }
+}

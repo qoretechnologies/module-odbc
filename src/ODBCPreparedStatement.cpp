@@ -78,6 +78,11 @@ int ODBCPreparedStatement::prepare(const QoreString& qstr, const QoreListNode* a
 }
 
 int ODBCPreparedStatement::exec(ExceptionSink* xsink) {
+    // results of a previous execution that were not read to the end (an open cursor or pending results) are
+    // discarded, so that the statement can be executed again with every driver; drivers such as the SQL Server
+    // drivers otherwise refuse the execution with "invalid cursor state"
+    SQLFreeStmt(stmt, SQL_CLOSE);
+
     if (hasArrays(*bindArgs)) {
         if (bindInternArray(*bindArgs, xsink))
             return -1;
