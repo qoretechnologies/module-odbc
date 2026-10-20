@@ -4,7 +4,7 @@
 
     Qore ODBC module
 
-    Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+    Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -35,11 +35,15 @@ namespace odbc {
 ODBCPreparedStatement::ODBCPreparedStatement(ODBCConnection* c, ExceptionSink* xsink) :
         ODBCStatement(c, xsink),
     outputRow(xsink) {
+    // SQLStatement returns one result set
+    setSingleResultSet();
 }
 
 ODBCPreparedStatement::ODBCPreparedStatement(Datasource* ds, ExceptionSink* xsink) :
         ODBCStatement(ds, xsink),
     outputRow(xsink) {
+    // SQLStatement returns one result set
+    setSingleResultSet();
 }
 
 ODBCPreparedStatement::~ODBCPreparedStatement() {
@@ -81,7 +85,12 @@ int ODBCPreparedStatement::exec(ExceptionSink* xsink) {
             return -1;
     }
 
-    return execIntern(0, 0, xsink);
+    // leading row counts are read here, so that a failing statement raises its error from exec() and
+    // affectedRows() gives the total of the row counts
+    if (execIntern(0, 0, xsink)) {
+        return -1;
+    }
+    return advanceToResultSet(xsink);
 }
 
 int ODBCPreparedStatement::bind(const QoreListNode& args, ExceptionSink* xsink) {

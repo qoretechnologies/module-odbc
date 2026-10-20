@@ -18,12 +18,13 @@
     @section odbc_statement_errors Statement Errors
 
     |!Exception|!Description|!Common Causes|!Resolution
-    |\c ODBC-EXEC-ERROR|SQL statement execution failed|SQL syntax error, constraint violation, permission denied|Check SQL syntax, verify table/column names, check database permissions
+    |\c ODBC-EXEC-ERROR|SQL statement execution failed; raised for a failure of any statement of SQL that returns more than one result (see @ref odbc_multiple_results)|SQL syntax error, constraint violation, permission denied|Check SQL syntax, verify table/column names, check database permissions; roll back the transaction after a failed batch
     |\c ODBC-PREPARE-ERROR|Failed to prepare SQL statement|Invalid SQL syntax, referenced objects don't exist|Validate SQL syntax, ensure all referenced tables and columns exist
     |\c ODBC-PARSE-ERROR|Invalid SQL specification|Malformed SQL, invalid placeholder syntax|Check SQL syntax and placeholder formatting
     |\c ODBC-STATEMENT-ALLOC-ERROR|Cannot allocate a statement handle|Resource exhaustion, too many open statements|Close unused statements, check for statement handle leaks
     |\c ODBC-FETCH-ERROR|Error fetching data from result set|Connection lost during fetch, data conversion error|Check connection stability, verify data type compatibility
     |\c ODBC-SELECT-ROW-ERROR|selectRow() returned more than one row|Query returned multiple rows when only one was expected|Add LIMIT 1 to query or refine WHERE clause to ensure single row result
+    |\c ODBC-MULTIPLE-RESULT-SETS-ERROR|SQL returned more than one result set to a call that returns one (Datasource::selectRows(), selectRowsTyped(), selectRow(), selectColumnar(), or SQLStatement)|A batch or stored procedure with several queries|Use Datasource::select() or Datasource::exec() to retrieve every result (see @ref odbc_multiple_results)
 
     @section odbc_binding_errors Binding Errors
 

@@ -1,0 +1,138 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that a program interrupt ends an ODBC call that is blocked on the server.
+#
+# The blocked statement waits for a row lock that the test holds and never releases, so the call can only end by
+# being cancelled.  The test requests the interrupt only once the server is known to be executing the blocked
+# statement: the statement before it releases a lock that the test is waiting for.  No sleeps or timeouts are used.
+# Runs against SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+
+%modern
+%no-child-restrictions
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class OdbcCancelTest
+
+class OdbcCancelTest inherits QUnit::Test {
+    private {
+        *string connstr;
+        *Datasource ds;
+        string table = sprintf("odbc_cancel_%d_%d", getpid(), now_us() % 1000000000);
+        string signal = sprintf("odbc_cancel_signal_%d_%d", getpid(), now_us() % 1000000000);
+    }
+
+    constructor() : QUnit::Test("ODBC cancellation", "1.0", \ARGV) {
+        addTestCase("an interrupt cancels a blocked later statement of a batch", \laterStatement());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            return;
+        }
+        ds = new Datasource(connstr);
+        ds.open();
+        if (ds.getDriverRealName() !~ /SQL Server/i) {
+            ds.close();
+            remove ds;
+            return;
+        }
+        try {
+            ds.exec("drop table " + table);
+            ds.commit();
+        } catch (hash<ExceptionInfo> ex) {
+            ds.rollback();
+        }
+        ds.exec("create table " + table + " (a int primary key)");
+        ds.exec("insert into " + table + " values (1)");
+        ds.commit();
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.exec("drop table " + table);
+            ds.commit();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a SQL Server connection");
+        }
+    }
+
+    # runs the SQL in a sandboxed program while the test holds the row lock; returns what the call returned
+    private hash<auto> runBlocked(string sql) {
+        # hold the row lock that the last statement of the batch waits for
+        Datasource holder(connstr);
+        holder.open();
+        on_exit {
+            holder.rollback();
+            holder.close();
+        }
+        holder.exec("update " + table + " set a = a where a = 1");
+
+        SandboxManager sm();
+        Program p(PO_NO_CHILD_PO_RESTRICTIONS);
+        p.setSandboxManager(sm);
+        p.loadModule("odbc");
+        p.parse("
+%new-style
+%require-types
+%strict-args
+
+sub run(Queue q, string connstr, string signal, string sql) {
+    try {
+        Datasource ds(connstr);
+        ds.open();
+        # the session holds the signal lock until the batch releases it
+        ds.exec(sprintf(\"exec sp_getapplock @Resource = '%s', @LockMode = 'Exclusive', @LockOwner = 'Session'\",
+            signal));
+        q.push('ready');
+        auto rv = ds.select(sql);
+        q.push({'value': rv});
+    } catch (hash<ExceptionInfo> ex) {
+        q.push({'err': ex.err, 'desc': ex.desc});
+    }
+}
+", "cancel");
+
+        Queue q();
+        background p.callFunction("run", q, connstr, signal, sql);
+        assertEq("ready", q.get());
+
+        # blocks until the batch has released the signal lock, i.e. until the server executes the blocked statement
+        Datasource waiter(connstr);
+        waiter.open();
+        on_exit {
+            waiter.rollback();
+            waiter.close();
+        }
+        waiter.exec(sprintf("exec sp_getapplock @Resource = '%s', @LockMode = 'Exclusive', @LockOwner = 'Session'",
+            signal));
+
+        sm.requestInterrupt();
+        return q.get();
+    }
+
+    laterStatement() {
+        # "raiserror ... with nowait" sends the first result to the client at once (the server would otherwise
+        # keep it in its output buffer until the batch ends); the client then waits in SQLMoreResults() for the
+        # update
+        hash<auto> rv = runBlocked(sprintf("set nocount on; select 1 as a; raiserror('flush', 0, 1) with nowait; "
+            "exec sp_releaseapplock @Resource = '%s', @LockOwner = 'Session'; update %s set a = a where a = 1",
+            signal, table));
+        assertEq("PROGRAM-INTERRUPTED", rv.err, sprintf("%y", rv));
+    }
+}

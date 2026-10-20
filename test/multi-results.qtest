@@ -1,0 +1,442 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that every result of SQL returning more than one result (batches, procedures) is read: the error of any
+# statement is raised, result sets and row counts are returned, and the connection is usable afterwards.
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class MultiResultsTest
+
+class MultiResultsTest inherits QUnit::Test {
+    private {
+        *Datasource ds;
+        string table = sprintf("odbc_mr_%d_%d", getpid(), now_us() % 1000000000);
+        bool pg;
+        bool ms;
+        # FreeTDS runs a batch that is prepared or has bound parameters as an RPC and reports only the last row
+        # count of such a batch
+        bool freetds;
+        # the text of a primary key violation on the server
+        string dupKey;
+    }
+
+    constructor() : QUnit::Test("ODBC multiple results", "1.0", \ARGV) {
+        addTestCase("single statements are unchanged", \singleStatements());
+        addTestCase("all result sets of a batch", \resultSets());
+        addTestCase("all row counts of a batch", \rowCounts());
+        addTestCase("result sets and row counts mixed", \mixedResults());
+        addTestCase("row counts of 0 or less are skipped", \skippedCounts());
+        addTestCase("a failing later statement raises its error", \laterErrors());
+        addTestCase("one-result-set calls return the only result set", \oneResultSet());
+        addTestCase("one-result-set calls refuse a second result set", \multipleResultSets());
+        addTestCase("one-result-set calls without a result set behave as for one statement", \noResultSet());
+        addTestCase("typed results of a batch", \typedResults());
+        addTestCase("array binding gives the total row count", \arrayRowCounts());
+        addTestCase("SQLStatement totals the row counts", \statementRowCounts());
+        addTestCase("SQLStatement skips leading row counts", \statementLeadingCounts());
+        addTestCase("SQLStatement raises a later statement's error", \statementErrors());
+        addTestCase("SQLStatement refuses a second result set", \statementResultSets());
+        addTestCase("SQLStatement leaves the connection usable", \statementConnection());
+        addTestCase("SQLStatement without a result set fetches as for one statement", \statementNoResultSet());
+        addTestCase("SQL Server procedures and messages", \sqlServer());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        *string connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            return;
+        }
+        ds = new Datasource(connstr);
+        ds.open();
+        string driver = ds.getDriverRealName();
+        pg = driver == "PostgreSQL";
+        ms = driver =~ /SQL Server/i;
+        if (!pg && !ms) {
+            ds.close();
+            remove ds;
+            return;
+        }
+        dupKey = pg ? "duplicate key" : "PRIMARY KEY";
+        # FreeTDS versions are 0.x and 1.x; the Microsoft driver's are 11 and later
+        freetds = ms && ds.getClientVersion() < 10000000;
+        try {
+            ds.exec("drop table " + table);
+            ds.commit();
+        } catch (hash<ExceptionInfo> ex) {
+            ds.rollback();
+        }
+        ds.exec("create table " + table + " (a int primary key)");
+        ds.commit();
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.exec("drop table " + table);
+            ds.commit();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
+        }
+        # each test starts with one committed row
+        ds.rollback();
+        ds.exec("delete from " + table);
+        ds.exec("insert into " + table + " values (1)");
+        ds.commit();
+    }
+
+    tearDown() {
+        if (ds) {
+            ds.rollback();
+        }
+    }
+
+    # returns the rows of the test table
+    private list<int> rows() {
+        return map $1.a, ds.selectRows("select a from " + table + " order by a");
+    }
+
+    # returns the value of the call, or the exception it raised
+    private hash<auto> outcome(code c) {
+        try {
+            return {"value": c()};
+        } catch (hash<ExceptionInfo> ex) {
+            return {"err": ex.err, "desc": ex.desc};
+        }
+    }
+
+    # SQL that produces a result without columns or row count on the server
+    private string noCountStatement() {
+        return pg ? "do $$ begin raise notice 'note'; end $$" : "print 'note'";
+    }
+
+    singleStatements() {
+        assertEq(1, ds.exec("insert into " + table + " values (2)"));
+        assertEq(0, ds.exec("update " + table + " set a = a where a = 99"));
+        assertEq({"a": (1, 2)}, ds.select("select a from " + table + " order by a"));
+        assertEq(({"a": 1}, {"a": 2}), ds.selectRows("select a from " + table + " order by a"));
+        assertEq({"a": 2}, ds.selectRow("select a from " + table + " where a = 2"));
+        assertEq((), ds.selectRows("select a from " + table + " where a = 99"));
+        assertNothing(ds.selectRow("select a from " + table + " where a = 99"));
+        assertThrows("ODBC-SELECT-ROW-ERROR", \ds.selectRow(), "select a from " + table);
+    }
+
+    resultSets() {
+        hash<auto> expected = {"query0": {"a": (1,)}, "query1": {"b": (2,)}};
+        assertEq(expected, ds.select("select 1 as a; select 2 as b"));
+        assertEq(expected, ds.exec("select 1 as a; select 2 as b"));
+        assertEq(expected, ds.execRaw("select 1 as a; select 2 as b"));
+        assertEq({"query0": {"a": (1,)}, "query1": {"b": (2,)}, "query2": {"a": (1,)}},
+            ds.select("select 1 as a; select 2 as b; select a from " + table));
+        # an empty result set is still a result set
+        assertEq({"query0": {"a": ()}, "query1": {"b": (2,)}},
+            ds.select("select a from " + table + " where a = 99; select 2 as b"));
+    }
+
+    rowCounts() {
+        assertEq({"query0": 1, "query1": 1, "query2": 3}, ds.execRaw("insert into " + table + " values (2); "
+            "insert into " + table + " values (3); update " + table + " set a = a + 10"));
+        assertEq((11, 12, 13), rows());
+        # deletes 4, 11 and 12
+        auto v = ds.exec("insert into " + table + " values (%v); delete from " + table + " where a < 13", 4);
+        assertEq(freetds ? 3 : {"query0": 1, "query1": 3}, v);
+        assertEq((13,), rows());
+    }
+
+    mixedResults() {
+        assertEq({"query0": 1, "query1": {"a": (1, 2)}, "query2": {"n": (2,)}},
+            ds.exec("insert into " + table + " values (2); select a from " + table + " order by a; "
+                "update " + table + " set a = a where a = 99; select count(*) as n from " + table));
+    }
+
+    skippedCounts() {
+        assertEq({"a": (1,)}, ds.select("update " + table + " set a = a where a = 99; select 1 as a"));
+        assertEq(1, ds.exec("insert into " + table + " values (2); update " + table + " set a = a where a = 99"));
+        assertEq(0, ds.exec("update " + table + " set a = a where a = 98; update " + table
+            + " set a = a where a = 99"));
+        assertEq(0, ds.execRaw("update " + table + " set a = a where a = 98; update " + table
+            + " set a = a where a = 99"));
+        assertEq(0, ds.select("update " + table + " set a = a where a = 98; update " + table
+            + " set a = a where a = 99"));
+        assertEq({"a": (1,)}, ds.select(noCountStatement() + "; select 1 as a"));
+    }
+
+    laterErrors() {
+        # the second statement violates the primary key
+        string dml = "insert into " + table + " values (2); insert into " + table + " values (1); insert into "
+            + table + " values (3)";
+        foreach string api in ("exec", "execRaw", "select", "selectTyped") {
+            hash<auto> o = outcome(auto sub () { return call_object_method(ds, api, dml); });
+            assertEq("ODBC-EXEC-ERROR", o.err, api);
+            assertRegex(dupKey, o.desc ?? "", api);
+            ds.rollback();
+            assertEq((1,), rows(), api);
+        }
+
+        # the error of a statement after a result set
+        string sql = "select a from " + table + "; insert into " + table + " values (1)";
+        foreach string api in ("exec", "execRaw", "select", "selectTyped", "selectRows", "selectRow",
+            "selectRowsTyped", "selectColumnar") {
+            hash<auto> o = outcome(auto sub () { return call_object_method(ds, api, sql); });
+            assertEq("ODBC-EXEC-ERROR", o.err, api);
+            assertRegex(dupKey, o.desc ?? "", api);
+            ds.rollback();
+        }
+
+        # with bound parameters
+        foreach string api in ("exec", "select") {
+            hash<auto> o = outcome(auto sub () {
+                return call_object_method(ds, api, "insert into " + table + " values (%v); insert into " + table
+                    + " values (1)", 2);
+            });
+            assertEq("ODBC-EXEC-ERROR", o.err, api);
+            assertRegex(dupKey, o.desc ?? "", api);
+            ds.rollback();
+        }
+
+        # the connection is usable after the error
+        assertEq({"x": (1,)}, ds.select("select 1 as x"));
+    }
+
+    oneResultSet() {
+        string sql = "insert into " + table + " values (2); select a from " + table + " order by a";
+        assertEq(({"a": 1}, {"a": 2}), ds.selectRows(sql));
+        ds.rollback();
+        assertEq((1, 2), (map $1.a, ds.selectRowsTyped(sql)));
+        ds.rollback();
+        assertEq({"n": 2}, ds.selectRow("insert into " + table + " values (2); select count(*) as n from " + table));
+        ds.rollback();
+        assertEq(({"a": 1}, {"a": 2}), ds.selectColumnar(sql).toRows());
+        ds.rollback();
+        # row counts after the result set are read and skipped
+        assertEq(({"a": 1},), ds.selectRows("select a from " + table + "; update " + table + " set a = a"));
+        assertEq({"a": 1}, ds.selectRow("select a from " + table + "; update " + table + " set a = a"));
+        assertNothing(ds.selectRow("select a from " + table + " where a = 99; update " + table + " set a = a"));
+    }
+
+    multipleResultSets() {
+        foreach string api in ("selectRows", "selectRow", "selectRowsTyped", "selectColumnar") {
+            assertThrows("ODBC-MULTIPLE-RESULT-SETS-ERROR", sub () {
+                call_object_method(ds, api, "select 1 as a; select 2 as b");
+            }, NOTHING, api);
+            assertThrows("ODBC-MULTIPLE-RESULT-SETS-ERROR", sub () {
+                call_object_method(ds, api, "select a from " + table + " where a = 99; update " + table
+                    + " set a = a; select 2 as b");
+            }, NOTHING, api);
+        }
+    }
+
+    noResultSet() {
+        # the outcome is the same as for one row-count statement on the same driver (no rows, or the driver's
+        # "invalid cursor state" error)
+        foreach string api in ("selectRows", "selectRow", "selectRowsTyped", "selectColumnar") {
+            hash<auto> one = outcome(auto sub () {
+                return call_object_method(ds, api, "insert into " + table + " values (5)");
+            });
+            ds.rollback();
+            hash<auto> batch = outcome(auto sub () {
+                return call_object_method(ds, api, "insert into " + table + " values (5); insert into " + table
+                    + " values (6)");
+            });
+            ds.rollback();
+            assertEq(one, batch, api);
+            # the error of a later statement is raised even without a result set
+            hash<auto> err = outcome(auto sub () {
+                return call_object_method(ds, api, "insert into " + table + " values (5); insert into " + table
+                    + " values (1)");
+            });
+            ds.rollback();
+            assertEq("ODBC-EXEC-ERROR", err.err, api);
+            assertRegex(dupKey, err.desc ?? "", api);
+        }
+    }
+
+    typedResults() {
+        hash<auto> h = ds.selectTyped("select 1 as a; select 2 as b; insert into " + table + " values (2)");
+        assertEq(("query0", "query1", "query2"), keys h);
+        assertEq((1,), h.query0.a.toList());
+        assertEq((2,), h.query1.b.toList());
+        assertEq(1, h.query2);
+    }
+
+    arrayRowCounts() {
+        assertEq(3, ds.exec("insert into " + table + " values (%v)", (10, 11, 12)));
+        assertEq(3, ds.exec("update " + table + " set a = a where a = %v", (10, 11, 12)));
+        assertEq((1, 10, 11, 12), rows());
+        ds.rollback();
+
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("insert into " + table + " values (%v)");
+        stmt.bindArgs(((20, 21, 22),));
+        stmt.exec();
+        assertEq(3, stmt.affectedRows());
+        assertEq((1, 20, 21, 22), rows());
+    }
+
+    statementRowCounts() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("insert into " + table + " values (2); insert into " + table + " values (3); update " + table
+            + " set a = a + 10");
+        stmt.exec();
+        # 1 + 1 + 3 rows; FreeTDS reports only the update's count
+        assertEq(freetds ? 3 : 5, stmt.affectedRows());
+        assertEq((11, 12, 13), rows());
+    }
+
+    statementLeadingCounts() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("insert into " + table + " values (2); select a from " + table + " order by a");
+        stmt.exec();
+        # FreeTDS does not report the insert's count
+        assertEq(freetds ? -1 : 1, stmt.affectedRows());
+        assertEq(({"a": 1}, {"a": 2}), stmt.fetchRows());
+        assertFalse(stmt.next());
+    }
+
+    statementErrors() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("insert into " + table + " values (2); insert into " + table + " values (1)");
+        hash<auto> o = outcome(auto sub () { stmt.exec(); return stmt.affectedRows(); });
+        assertEq("ODBC-EXEC-ERROR", o.err);
+        assertRegex(dupKey, o.desc ?? "");
+        stmt.rollback();
+        assertEq((1,), rows());
+
+        stmt.prepare("select a from " + table + "; insert into " + table + " values (1)");
+        o = outcome(auto sub () { stmt.exec(); return stmt.fetchRows(); });
+        assertEq("ODBC-EXEC-ERROR", o.err);
+        assertRegex(dupKey, o.desc ?? "");
+        stmt.rollback();
+
+        # the error is raised when iterating with next()
+        stmt.prepare("select a from " + table + "; insert into " + table + " values (1)");
+        o = outcome(auto sub () {
+            stmt.exec();
+            list<auto> l = ();
+            while (stmt.next()) {
+                l += stmt.fetchRow();
+            }
+            return l;
+        });
+        assertEq("ODBC-EXEC-ERROR", o.err);
+        assertRegex(dupKey, o.desc ?? "");
+    }
+
+    statementResultSets() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("select 1 as a; select 2 as b");
+        assertThrows("ODBC-MULTIPLE-RESULT-SETS-ERROR", \stmt.fetchRows());
+        # the remaining results were discarded
+        assertEq((), stmt.fetchRows());
+
+        stmt.prepare("select 1 as a; select 2 as b");
+        assertThrows("ODBC-MULTIPLE-RESULT-SETS-ERROR", \stmt.fetchColumns());
+        stmt.prepare("select 1 as a; select 2 as b");
+        assertThrows("ODBC-MULTIPLE-RESULT-SETS-ERROR", \stmt.fetchColumnar());
+    }
+
+    statementConnection() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("select a from " + table + "; update " + table + " set a = a");
+        list<auto> l = ();
+        while (stmt.next()) {
+            l += stmt.fetchRow();
+        }
+        assertEq(({"a": 1},), l);
+        # the statement is still open, but holds no results: another statement can run on the connection
+        assertEq({"x": (1,)}, ds.select("select 1 as x"));
+        # the statement is at its end, as after one statement
+        assertFalse(stmt.next());
+        assertEq((), stmt.fetchRows());
+        assertEq({}, stmt.fetchColumns());
+        assertEq(("a",), keys stmt.describe());
+    }
+
+    statementNoResultSet() {
+        # the outcome of fetching from a statement without a result set is the same as for one row-count
+        # statement on the same driver (no rows, or the driver's "invalid cursor state" error)
+        code fetches = hash<auto> sub (string sql) {
+            SQLStatement stmt(ds);
+            on_exit {
+                stmt.close();
+                ds.rollback();
+            }
+            stmt.prepare(sql);
+            stmt.exec();
+            hash<auto> rv;
+            rv.affected = stmt.affectedRows();
+            rv.next = outcome(\stmt.next());
+            rv.fetchRows = outcome(\stmt.fetchRows());
+            rv.fetchColumns = outcome(\stmt.fetchColumns());
+            rv.getOutput = outcome(\stmt.getOutput());
+            rv.describe = outcome(\stmt.describe());
+            return rv;
+        };
+        hash<auto> one = fetches("insert into " + table + " values (5)");
+        hash<auto> batch = fetches("insert into " + table + " values (5); update " + table + " set a = a where "
+            "a = 99");
+        assertEq(1, one.affected);
+        # 1 + 0 rows; FreeTDS reports only the update's count
+        assertEq(freetds ? 0 : 1, batch.affected);
+        assertEq(one - "affected", batch - "affected");
+    }
+
+    sqlServer() {
+        if (!ms) {
+            testSkip("SQL Server only");
+        }
+        # an error raised after a result set
+        hash<auto> o = outcome(auto sub () {
+            return ds.select("select 1 as a; raiserror('second statement failed', 16, 1)");
+        });
+        assertEq("ODBC-EXEC-ERROR", o.err);
+        assertRegex("second statement failed", o.desc ?? "");
+
+        # a procedure without "set nocount on" returns the row count of its insert before its result set
+        string proc = table + "_p";
+        try {
+            ds.exec("drop procedure " + proc);
+            ds.commit();
+        } catch (hash<ExceptionInfo> ex) {
+            ds.rollback();
+        }
+        ds.exec("create procedure " + proc + " as begin insert into " + table + " values (7); select a from "
+            + table + " order by a; end");
+        ds.commit();
+        on_exit {
+            ds.rollback();
+            ds.exec("drop procedure " + proc);
+            ds.commit();
+        }
+        auto v = ds.exec("exec " + proc);
+        # the Microsoft driver reports the procedure's row count, FreeTDS does not
+        if (v.query0.typeCode() == NT_INT) {
+            assertEq({"query0": 1, "query1": {"a": (1, 7)}}, v);
+        } else {
+            assertEq({"a": (1, 7)}, v);
+        }
+        ds.rollback();
+        assertEq(({"a": 1}, {"a": 7}), ds.selectRows("exec " + proc));
+    }
+}

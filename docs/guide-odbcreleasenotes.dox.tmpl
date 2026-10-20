@@ -24,6 +24,19 @@
 
     @subsection odbcv2_fixes Bug Fixes
 
+    - Read every result of SQL that returns more than one result, such as a batch of statements or a stored
+      procedure; previously only the first result was read, so later result sets and row counts were lost and,
+      with SQL Server, errors of later statements were silently ignored.  An error in any statement is now raised,
+      @ref Qore::SQL::Datasource::exec() "Datasource::exec()" and @ref Qore::SQL::Datasource::select() "Datasource::select()"
+      return every result set and row count, and calls that return one result set raise
+      \c ODBC-MULTIPLE-RESULT-SETS-ERROR for a second result set instead of discarding it
+      (see @ref odbc_multiple_results)
+    - A @ref Qore::SQL::SQLStatement "SQLStatement" no longer leaves a SQL Server connection busy after its result
+      set has been read; @ref Qore::SQL::SQLStatement::affectedRows() "SQLStatement::affectedRows()" returns the
+      total row count of a batch
+    - Return the total row count of DML executed with parameter arrays; with drivers that report a row count for
+      each parameter set, such as psqlODBC, only the first set's count was returned
+    - A program interrupt cancels a call waiting for a later result of a batch
     - Preserve SQL NULL values in all-NULL, floating-point, and boolean parameter arrays
     - Allocate valid storage for empty-string and empty-binary arrays and scalar broadcasts
     - Check array buffer size arithmetic and cooperative cancellation while preparing string and binary arrays

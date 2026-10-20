@@ -4,7 +4,7 @@
 
     Qore ODBC module
 
-    Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+    Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -73,12 +73,55 @@ public:
     DLLLOCAL ODBCStatement& operator=(const ODBCStatement& s) = delete;
 
     //! Return how many rows were affected by the executed statement.
-    /** @return count of affected rows; -1 in case the number is not available
+    /** When more than one result has been read, this is the total of the row counts of all row-count results
+        read so far.
+
+        @return count of affected rows; -1 in case the number is not available
      */
     DLLLOCAL int rowsAffected() const { return affectedRowCount; }
 
-    //! Return if there are any results available.
+    //! Return if the current result is a result set (has result columns).
+    /** Once all results have been read, returns whether the last result set had columns; makes no driver call
+        then.
+     */
     DLLLOCAL bool hasResultData();
+
+    //! Makes the statement return exactly one result set
+    /** When the current result set is exhausted, the remaining results are read: a failing statement raises its
+        error, row counts are added to the affected row count, and another result set raises
+        \c ODBC-MULTIPLE-RESULT-SETS-ERROR.  Used by SQLStatement and by the Datasource methods that return one
+        result set.
+     */
+    DLLLOCAL void setSingleResultSet() { singleResultSet = true; }
+
+    //! Moves from a row-count result to the first result set of the execution, if there is one
+    /** Reads row-count results (raising the error of any failing statement) until a result set is current or all
+        results have been read.
+
+        If the execution has no result set, fetching afterwards behaves exactly as fetching from its first result
+        did before the remaining results were read: what one fetch from the first result returns is recorded and
+        returned for every later fetch.
+
+        @param xsink exception sink
+
+        @return 0 for OK, -1 for error
+     */
+    DLLLOCAL int advanceToResultSet(ExceptionSink* xsink);
+
+    //! Returns every result of the execution in the format of Datasource::exec() and Datasource::select()
+    /** One result is returned as before: a hash of column lists for a result set, otherwise the row count.
+
+        With more than one result, each result set is a hash of column lists (typed if \a typed is true), and
+        each positive row count an integer; row counts of 0 or less are skipped.  When executed with parameter
+        arrays, all row counts are added into one count.  No values left give 0, one value is returned as it
+        is, more than one are returned in a hash with keys \c query0, \c query1, ...
+
+        @param xsink exception sink
+        @param typed whether result sets are returned as typed results (Datasource::selectTyped())
+
+        @return the results; no value if an exception was raised
+     */
+    DLLLOCAL QoreValue getAllResults(ExceptionSink* xsink, bool typed = false);
 
     //! Return a hash describing result columns.
     /** @param xsink exception sink
@@ -208,6 +251,36 @@ protected:
      */
     DLLLOCAL QoreHashNode* getRowIntern(GetRowInternStatus& status, ExceptionSink* xsink);
 
+    //! Fetches the next row of the current result
+    /** Once all results have been read, makes no driver call and returns what fetching returned then.  At the end
+        of a result set of a statement returning one result set, reads the remaining results (see
+        setSingleResultSet()).
+
+        @param xsink exception sink
+
+        @return \c SQL_SUCCESS or \c SQL_SUCCESS_WITH_INFO for a row, \c SQL_NO_DATA at the end of the result
+        set, \c SQL_ERROR if an exception was raised
+     */
+    DLLLOCAL SQLRETURN fetchRowIntern(ExceptionSink* xsink);
+
+    //! Reads the next result of the execution with SQLMoreResults()
+    /** @param xsink exception sink
+
+        @return 1 if another result is current, 0 if all results have been read, -1 if a statement failed or the
+        call was cancelled (exception raised; the remaining results are discarded)
+     */
+    DLLLOCAL int nextResult(ExceptionSink* xsink);
+
+    //! Reads the remaining results after the current result set, for a statement returning one result set
+    /** @param xsink exception sink
+
+        @return 0 for OK, -1 for error (exception raised)
+     */
+    DLLLOCAL int finishResults(ExceptionSink* xsink);
+
+    //! Discards any remaining results; the statement then returns no further rows
+    DLLLOCAL void discardResults();
+
     //! Return whether the passed arguments have arrays.
     DLLLOCAL bool hasArrays(const QoreListNode* args) const;
 
@@ -265,6 +338,33 @@ private:
     //! Count of rows affected by the executed UPDATE, INSERT or DELETE statements.
     SQLLEN affectedRowCount = 0;
 
+    //! Row count of the current result if it is a row-count result, otherwise -1
+    SQLLEN currentRowCount = -1;
+
+    //! Total of the row counts of the row-count results read so far; -1 if no count is known
+    SQLLEN rowCountTotal = -1;
+
+    //! Number of parameter sets of the current execution (more than 1 when executed with parameter arrays)
+    size_t paramSetSize = 1;
+
+    //! Whether the statement returns exactly one result set (see setSingleResultSet())
+    bool singleResultSet = false;
+
+    //! Whether all results of the current execution have been read
+    /** No fetch or metadata call reaches the driver then: after the last SQLMoreResults() the driver manager
+        refuses them.
+     */
+    bool resultsDone = false;
+
+    //! What a fetch returns once all results have been read (see advanceToResultSet())
+    SQLRETURN doneFetchRet = SQL_NO_DATA;
+
+    //! Diagnostics of a failed fetch recorded for doneFetchRet
+    std::string doneFetchDiag;
+
+    //! SQL text of the current execution for error messages; empty for a prepared statement
+    std::string execSql;
+
     //! Count of rows already read from the result-set.
     unsigned int readRows = 0;
 
@@ -285,6 +385,12 @@ private:
 
     //! Free ODBC statement handle associated with this statement.
     void freeStatementHandle();
+
+    //! Reads the current result set as a hash of column lists, typed if \a typed is true
+    DLLLOCAL QoreValue getResultSetValue(bool typed, ExceptionSink* xsink);
+
+    //! Sets the row count of the current result and adds it to the total; -1 for a result set
+    DLLLOCAL void setCurrentRowCount(SQLLEN count);
 
     //! Populate column hash.
     /** @param h column hash

@@ -39,10 +39,103 @@
 #include "qore/QoreLib.h"
 #include "qore/DBI.h"
 
+#include "ODBCCancelHelper.h"
 #include "ODBCColumnSizeConstants.h"
 #include "ODBCConnection.h"
 
 namespace odbc {
+
+namespace {
+//! Collects the results of an execution that returned more than one result (see ODBCStatement::getAllResults())
+class ODBCResultCollector {
+public:
+    DLLLOCAL ODBCResultCollector(bool sumCounts, ExceptionSink* xsink) : sumCounts(sumCounts),
+            resultSets(new QoreListNode(autoTypeInfo), xsink) {
+    }
+
+    //! Adds a result set; takes ownership of the value
+    DLLLOCAL void addResultSet(QoreValue v, ExceptionSink* xsink) {
+        resultSets->push(v, xsink);
+    }
+
+    //! Adds a row count: kept if positive, or added to the total when executed with parameter arrays
+    DLLLOCAL void addRowCount(int64 count) {
+        if (!sumCounts) {
+            if (count > 0) {
+                Item item;
+                item.pos = resultSets->size();
+                item.count = count;
+                counts.push_back(item);
+            }
+            return;
+        }
+        if (count < 0) {
+            return;
+        }
+        if (counts.empty()) {
+            Item item;
+            item.pos = resultSets->size();
+            item.count = count;
+            counts.push_back(item);
+            return;
+        }
+        counts[0].count += count;
+    }
+
+    //! Returns 0 for no values, the value itself for one value, otherwise a hash with keys query0, query1, ...
+    DLLLOCAL QoreValue release(ExceptionSink* xsink) {
+        // a summed total of 0 is skipped like any other row count of 0
+        if (sumCounts && !counts.empty() && counts[0].count <= 0) {
+            counts.clear();
+        }
+        ReferenceHolder<QoreListNode> values(new QoreListNode(autoTypeInfo), xsink);
+        size_t next_count = 0;
+        for (size_t i = 0, e = resultSets->size(); i <= e; ++i) {
+            if (i && !(i % 100) && qore_check_cancel(xsink, "collecting ODBC results")) {
+                return QoreValue();
+            }
+            while (next_count < counts.size() && counts[next_count].pos == i) {
+                values->push(counts[next_count++].count, xsink);
+            }
+            if (i < e) {
+                values->push(resultSets->retrieveEntry(i).refSelf(), xsink);
+            }
+        }
+        assert(next_count == counts.size());
+
+        size_t size = values->size();
+        if (!size) {
+            return static_cast<int64>(0);
+        }
+        if (size == 1) {
+            return values->retrieveEntry(0).refSelf();
+        }
+        ReferenceHolder<QoreHashNode> rv(new QoreHashNode(autoTypeInfo), xsink);
+        for (size_t i = 0; i < size; ++i) {
+            if (i && !(i % 100) && qore_check_cancel(xsink, "collecting ODBC results")) {
+                return QoreValue();
+            }
+            QoreStringMaker key("query%d", static_cast<int>(i));
+            rv->setKeyValue(key.c_str(), values->retrieveEntry(i).refSelf(), xsink);
+            if (*xsink) {
+                return QoreValue();
+            }
+        }
+        return rv.release();
+    }
+
+private:
+    //! A row count and the number of result sets before it
+    struct Item {
+        size_t pos;
+        int64 count;
+    };
+
+    bool sumCounts;
+    ReferenceHolder<QoreListNode> resultSets;
+    std::vector<Item> counts;
+};
+}
 
 #if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
 namespace {
@@ -471,6 +564,9 @@ ODBCStatement::~ODBCStatement() {
 }
 
 bool ODBCStatement::hasResultData() {
+    if (resultsDone) {
+        return !resColumns.empty();
+    }
     SQLSMALLINT columns = 0;
     SQLRETURN ret = SQLNumResultCols(stmt, &columns);
     if (!SQL_SUCCEEDED(ret)) { // error
@@ -717,14 +813,11 @@ QoreHashNode* ODBCStatement::getOutputHash(ExceptionSink* xsink, bool emptyHashI
             return 0;
         }
 
-        SQLRETURN ret = SQLFetch(stmt);
+        SQLRETURN ret = fetchRowIntern(xsink);
         if (ret == SQL_NO_DATA) { // Reached the end of the result-set.
             break;
         }
         if (!SQL_SUCCEEDED(ret)) { // error
-            std::string s("error occured when fetching row #%d");
-            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-            xsink->raiseException("ODBC-FETCH-ERROR", s.c_str(), readRows);
             return 0;
         }
 
@@ -776,14 +869,11 @@ QoreColumnarResult* ODBCStatement::getOutputColumnar(ExceptionSink* xsink, int m
             return nullptr;
         }
 
-        SQLRETURN ret = SQLFetch(stmt);
+        SQLRETURN ret = fetchRowIntern(xsink);
         if (ret == SQL_NO_DATA) {
             break;
         }
         if (!SQL_SUCCEEDED(ret)) {
-            std::string s("error occured when fetching row #%d");
-            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-            xsink->raiseException("ODBC-FETCH-ERROR", s.c_str(), readRows);
             return nullptr;
         }
 
@@ -1013,6 +1103,13 @@ void ODBCStatement::reset(ExceptionSink* xsink) {
     clear(xsink);
 
     affectedRowCount = 0;
+    currentRowCount = -1;
+    rowCountTotal = -1;
+    paramSetSize = 1;
+    resultsDone = false;
+    doneFetchRet = SQL_NO_DATA;
+    doneFetchDiag.clear();
+    execSql.clear();
     readRows = 0;
     paramCountInSql = 0;
 
@@ -1072,6 +1169,19 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
     // Check for interrupt before query execution
     if (qore_check_cancel(xsink)) {
         return -1;
+    }
+
+    // a new execution: none of its results has been read yet
+    resultsDone = false;
+    doneFetchRet = SQL_NO_DATA;
+    doneFetchDiag.clear();
+    resColumns.clear();
+    currentRowCount = -1;
+    rowCountTotal = -1;
+    if (str) {
+        execSql = str;
+    } else {
+        execSql.clear();
     }
 
     SQLRETURN ret;
@@ -1174,7 +1284,244 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
         affectedRowCount = -1;
     }
 
+    // a row count of the first result is the first part of the total of a multi-result execution
+    if (!hasResultData()) {
+        setCurrentRowCount(affectedRowCount);
+    }
+
     return 0;
+}
+
+void ODBCStatement::setCurrentRowCount(SQLLEN count) {
+    currentRowCount = count;
+    if (count >= 0) {
+        rowCountTotal = rowCountTotal < 0 ? count : rowCountTotal + count;
+    }
+}
+
+SQLRETURN ODBCStatement::fetchRowIntern(ExceptionSink* xsink) {
+    SQLRETURN ret;
+    if (resultsDone) {
+        ret = doneFetchRet;
+    } else {
+        ret = SQLFetch(stmt);
+    }
+
+    if (ret == SQL_NO_DATA) {
+        // the end of a result set: a statement returning one result set reads the remaining results now, so that
+        // their errors are raised and the connection is not left busy with them
+        if (singleResultSet && !resultsDone && finishResults(xsink)) {
+            return SQL_ERROR;
+        }
+        return SQL_NO_DATA;
+    }
+
+    if (!SQL_SUCCEEDED(ret)) {
+        QoreStringMaker desc("error occured when fetching row #%d", static_cast<int>(readRows));
+        if (resultsDone) {
+            desc.concat(doneFetchDiag.c_str());
+        } else {
+            std::string diag;
+            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, diag);
+            desc.concat(diag.c_str());
+        }
+        xsink->raiseException("ODBC-FETCH-ERROR", "%s", desc.c_str());
+        return SQL_ERROR;
+    }
+
+    return ret;
+}
+
+int ODBCStatement::nextResult(ExceptionSink* xsink) {
+    assert(!resultsDone);
+
+    if (qore_check_cancel(xsink, "reading the next ODBC result")) {
+        discardResults();
+        return -1;
+    }
+
+    SQLRETURN ret;
+    {
+        // a program interrupt cancels the call with SQLCancel()
+        ODBCCancelHelper cancelHelper(stmt);
+        ret = SQLMoreResults(stmt);
+    }
+
+    // a cancelled call is reported as the cancellation, not as the driver's "operation canceled" error
+    if (qore_check_cancel(xsink, "reading the next ODBC result")) {
+        discardResults();
+        return -1;
+    }
+
+    if (ret == SQL_NO_DATA) {
+        resultsDone = true;
+        return 0;
+    }
+
+    if (!SQL_SUCCEEDED(ret)) {
+        // a statement after the first one failed; raise its error like a failure of the first statement
+        QoreStringMaker desc("error in statement execution (sql: '%s', ret: %d)",
+            execSql.empty() ? "n/a" : execSql.c_str(), static_cast<int>(ret));
+        std::string diag;
+        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, diag);
+        desc.concat(diag.c_str());
+        xsink->raiseException("ODBC-EXEC-ERROR", "%s", desc.c_str());
+        affectedRowCount = -1;
+        discardResults();
+        return -1;
+    }
+
+    readRows = 0;
+    if (hasResultData()) {
+        currentRowCount = -1;
+    } else {
+        SQLLEN count = -1;
+        if (!SQL_SUCCEEDED(SQLRowCount(stmt, &count))) {
+            count = -1;
+        }
+        setCurrentRowCount(count);
+    }
+    // with more than one result, the affected row count is the total of all row counts
+    affectedRowCount = rowCountTotal;
+    return 1;
+}
+
+int ODBCStatement::finishResults(ExceptionSink* xsink) {
+    assert(singleResultSet);
+    assert(!resultsDone);
+
+    while (true) {
+        int rc = nextResult(xsink);
+        if (rc <= 0) {
+            // all results read (the last result set's columns stay described), or an error was raised
+            return rc;
+        }
+        if (hasResultData()) {
+            xsink->raiseException("ODBC-MULTIPLE-RESULT-SETS-ERROR", "the SQL returned more than one result set, "
+                "but this call returns only one; use Datasource::select() or Datasource::exec() to retrieve every "
+                "result");
+            discardResults();
+            return -1;
+        }
+        // a row count: added to the affected row count by nextResult()
+    }
+}
+
+void ODBCStatement::discardResults() {
+    // SQL_CLOSE discards pending results as well as the open cursor, so the connection is not left busy
+    SQLFreeStmt(stmt, SQL_CLOSE);
+    resultsDone = true;
+    doneFetchRet = SQL_NO_DATA;
+    doneFetchDiag.clear();
+}
+
+int ODBCStatement::advanceToResultSet(ExceptionSink* xsink) {
+    if (resultsDone || hasResultData()) {
+        return 0;
+    }
+
+    // The first result is a row count.  Fetching from it returns no rows with some drivers and raises an
+    // "invalid cursor state" error with others; once the remaining results have been read the driver manager
+    // refuses any fetch.  Record what a fetch from it returns, so that an execution without a result set behaves
+    // exactly as before.
+    doneFetchRet = SQLFetch(stmt);
+    if (doneFetchRet == SQL_NO_DATA || SQL_SUCCEEDED(doneFetchRet)) {
+        // a row-count result has no rows to return
+        doneFetchRet = SQL_NO_DATA;
+    } else {
+        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, doneFetchDiag);
+    }
+
+    while (true) {
+        int rc = nextResult(xsink);
+        if (rc < 0) {
+            return -1;
+        }
+        if (!rc) {
+            // no result set: later fetches return what the fetch above returned
+            return 0;
+        }
+        if (hasResultData()) {
+            doneFetchRet = SQL_NO_DATA;
+            doneFetchDiag.clear();
+            return 0;
+        }
+    }
+}
+
+QoreValue ODBCStatement::getResultSetValue(bool typed, ExceptionSink* xsink) {
+    ReferenceHolder<QoreHashNode> columns(getOutputHash(xsink, false), xsink);
+    if (*xsink || !columns) {
+        return QoreValue();
+    }
+#ifdef QDBI_METHOD_SELECT_TYPED
+    if (typed) {
+        ReferenceHolder<QoreHashNode> desc(describe(xsink), xsink);
+        if (*xsink) {
+            return QoreValue();
+        }
+        QoreHashNode* rv = qore_dbi_make_typed_select_result(conn->getDatasource(), *columns, *desc, xsink);
+        return rv ? QoreValue(rv) : QoreValue();
+    }
+#else
+    assert(!typed);
+#endif
+    return columns.release();
+}
+
+QoreValue ODBCStatement::getAllResults(ExceptionSink* xsink, bool typed) {
+    assert(!singleResultSet);
+
+    // the first result is read exactly as before
+    bool firstIsResultSet = hasResultData();
+    int64 firstRowCount = currentRowCount;
+    ValueHolder first(xsink);
+    if (firstIsResultSet) {
+        first = getResultSetValue(typed, xsink);
+        if (*xsink) {
+            return QoreValue();
+        }
+    } else {
+        first = static_cast<int64>(rowsAffected());
+    }
+
+    int rc = nextResult(xsink);
+    if (rc < 0) {
+        return QoreValue();
+    }
+    if (!rc) {
+        // one result
+        return first.release();
+    }
+
+    ODBCResultCollector results(paramSetSize > 1, xsink);
+    if (firstIsResultSet) {
+        results.addResultSet(first.release(), xsink);
+    } else {
+        results.addRowCount(firstRowCount);
+    }
+
+    while (true) {
+        if (hasResultData()) {
+            ValueHolder v(getResultSetValue(typed, xsink), xsink);
+            if (*xsink) {
+                return QoreValue();
+            }
+            results.addResultSet(v.release(), xsink);
+        } else {
+            results.addRowCount(currentRowCount);
+        }
+
+        rc = nextResult(xsink);
+        if (rc < 0) {
+            return QoreValue();
+        }
+        if (!rc) {
+            break;
+        }
+    }
+
+    return results.release(xsink);
 }
 
 int ODBCStatement::parse(QoreString* str, const QoreListNode* args, ExceptionSink* xsink) {
@@ -1286,15 +1633,12 @@ int ODBCStatement::parse(QoreString* str, const QoreListNode* args, ExceptionSin
 }
 
 QoreHashNode* ODBCStatement::getRowIntern(GetRowInternStatus& status, ExceptionSink* xsink) {
-    SQLRETURN ret = SQLFetch(stmt);
+    SQLRETURN ret = fetchRowIntern(xsink);
     if (ret == SQL_NO_DATA) { // Reached the end of the result-set.
         status = EGRIS_END;
         return nullptr;
     }
     if (!SQL_SUCCEEDED(ret)) { // error
-        std::string s("error occured when fetching row #%d");
-        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-        xsink->raiseException("ODBC-FETCH-ERROR", s.c_str(), readRows);
         status = EGRIS_ERROR;
         return nullptr;
     }
@@ -1373,6 +1717,7 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
     // Set parameter array size to 1.
     size_t one = 1;
     SQLSetStmtAttr(stmt, SQL_ATTR_PARAMSET_SIZE, reinterpret_cast<SQLPOINTER>(one), 0);
+    paramSetSize = one;
 
     size_t count = args ? args->size() : 0;
     for (unsigned int i = 0; i < count; i++) {
@@ -1625,6 +1970,8 @@ int ODBCStatement::bindInternArray(const QoreListNode* args, ExceptionSink* xsin
 
     // Set parameter array size.
     SQLSetStmtAttr(stmt, SQL_ATTR_PARAMSET_SIZE, reinterpret_cast<SQLPOINTER>(arraySize), 0);
+    // drivers that report a row count for each parameter set report them as separate results
+    paramSetSize = arraySize;
 
     // Specify an array in which to return the status of each set of parameters.
     // Since this is unnecessarily precise status reporting, we set it to 0,
@@ -1694,6 +2041,12 @@ int ODBCStatement::bindInternArray(const QoreListNode* args, ExceptionSink* xsin
 ///////////////////////////
 
 int ODBCStatement::fetchResultColumnMetadata(ExceptionSink* xsink) {
+    // once all results have been read, the last result set's columns stay described: the driver manager refuses
+    // metadata calls then
+    if (resultsDone) {
+        return 0;
+    }
+
     SQLSMALLINT columns;
     SQLRETURN ret = SQLNumResultCols(stmt, &columns);
     if (!SQL_SUCCEEDED(ret)) { // error

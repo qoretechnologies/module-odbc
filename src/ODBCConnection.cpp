@@ -276,10 +276,7 @@ QoreValue ODBCConnection::select(const QoreString* qstr, const QoreListNode* arg
     if (res.exec(qstr, args, xsink))
         return QoreValue();
 
-    if (res.hasResultData())
-        return res.getOutputHash(xsink, false);
-
-    return res.rowsAffected();
+    return res.getAllResults(xsink);
 }
 
 #ifdef QDBI_METHOD_SELECT_TYPED
@@ -293,22 +290,7 @@ QoreValue ODBCConnection::selectTyped(const QoreString* qstr, const QoreListNode
         return QoreValue();
     }
 
-    if (!res.hasResultData()) {
-        return res.rowsAffected();
-    }
-
-    ReferenceHolder<QoreHashNode> columns(res.getOutputHash(xsink, false), xsink);
-    if (*xsink || !columns) {
-        return QoreValue();
-    }
-
-    ReferenceHolder<QoreHashNode> desc(res.describe(xsink), xsink);
-    if (*xsink) {
-        return QoreValue();
-    }
-
-    QoreHashNode* rv = qore_dbi_make_typed_select_result(ds, *columns, *desc, xsink);
-    return rv ? QoreValue(rv) : QoreValue();
+    return res.getAllResults(xsink, true);
 }
 #endif
 
@@ -320,7 +302,8 @@ QoreColumnarResult* ODBCConnection::selectColumnar(const QoreString* qstr, const
         return nullptr;
     }
 
-    if (res.exec(qstr, args, xsink)) {
+    res.setSingleResultSet();
+    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink)) {
         return nullptr;
     }
 
@@ -339,7 +322,8 @@ QoreListNode* ODBCConnection::selectRows(const QoreString* qstr, const QoreListN
     if (*xsink)
         return nullptr;
 
-    if (res.exec(qstr, args, xsink))
+    res.setSingleResultSet();
+    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink))
         return nullptr;
 
     return res.getOutputList(xsink);
@@ -352,7 +336,8 @@ QoreValue ODBCConnection::selectRowsTyped(const QoreString* qstr, const QoreList
         return QoreValue();
     }
 
-    if (res.exec(qstr, args, xsink)) {
+    res.setSingleResultSet();
+    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink)) {
         return QoreValue();
     }
 
@@ -376,7 +361,8 @@ QoreHashNode* ODBCConnection::selectRow(const QoreString* qstr, const QoreListNo
     if (*xsink)
         return nullptr;
 
-    if (res.exec(qstr, args, xsink))
+    res.setSingleResultSet();
+    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink))
         return nullptr;
 
     return res.getSingleRow(xsink);
@@ -395,10 +381,7 @@ QoreValue ODBCConnection::exec(const QoreString* qstr, const QoreListNode* args,
     }
     activeTransaction = true;
 
-    if (res.hasResultData())
-        return res.getOutputHash(xsink, false);
-
-    return res.rowsAffected();
+    return res.getAllResults(xsink);
 }
 
 QoreValue ODBCConnection::execRaw(const QoreString* qstr, ExceptionSink* xsink) {
@@ -413,10 +396,7 @@ QoreValue ODBCConnection::execRaw(const QoreString* qstr, ExceptionSink* xsink) 
     }
     activeTransaction = true;
 
-    if (res.hasResultData())
-        return res.getOutputHash(xsink, false);
-
-    return res.rowsAffected();
+    return res.getAllResults(xsink);
 }
 
 int ODBCConnection::setOption(const char* opt, QoreValue val, ExceptionSink* xsink) {

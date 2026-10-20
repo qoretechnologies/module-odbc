@@ -66,6 +66,55 @@ major_version * 1000000 + minor_version * 10000 + sub_version
 
     Like all Qore components, the ODBC DBI driver is thread-safe.
 
+    @section odbc_multiple_results Multiple Results
+
+    SQL can return more than one result: a batch of several statements (for servers and drivers that accept one,
+    such as SQL Server and PostgreSQL), a stored procedure that returns row counts and result sets, or DML executed
+    with @ref odbcbindguide "parameter arrays" when the driver reports a row count for each parameter set.  The
+    driver reads every result:
+    - if any statement fails, its error is raised as \c ODBC-EXEC-ERROR with the server's diagnostics, and the
+      remaining results are discarded; statements that the server executed before or after it are part of the
+      current transaction, so roll it back
+    - SQL that returns exactly one result behaves as a single statement always has
+
+    |!Call|!More than one result
+    |@ref Qore::SQL::Datasource::exec() "Datasource::exec()", \
+        @ref Qore::SQL::Datasource::execRaw() "Datasource::execRaw()", \
+        @ref Qore::SQL::Datasource::select() "Datasource::select()", \
+        @ref Qore::SQL::Datasource::selectTyped() "Datasource::selectTyped()"|Each result set is returned as a hash \
+        of column lists (as a typed result with \c selectTyped()), each row count greater than 0 as an integer; row \
+        counts of 0 or less are skipped.  If more than one value is left, they are returned in a hash with keys \
+        \c query0, \c query1, ... in order; one value is returned as it is, and no value as 0.
+    |@ref Qore::SQL::Datasource::selectRows() "Datasource::selectRows()", \
+        @ref Qore::SQL::Datasource::selectRowsTyped() "Datasource::selectRowsTyped()", \
+        @ref Qore::SQL::Datasource::selectRow() "Datasource::selectRow()", \
+        @ref Qore::SQL::Datasource::selectColumnar() "Datasource::selectColumnar()"|Row counts are skipped and the \
+        only result set is returned.  A second result set raises \c ODBC-MULTIPLE-RESULT-SETS-ERROR.  Without a \
+        result set, the call behaves as for a single statement that returns none.
+    |@ref Qore::SQL::SQLStatement "SQLStatement"|@ref Qore::SQL::SQLStatement::exec() "SQLStatement::exec()" \
+        reads the row counts before the first result set, raising the error of a failing statement, and \
+        @ref Qore::SQL::SQLStatement::affectedRows() "SQLStatement::affectedRows()" returns the total of all row \
+        counts.  The statement returns one result set: when it has been read to the end, the remaining results are \
+        read, so the call that reaches the end raises the error of a later failing statement, and a second result \
+        set raises \c ODBC-MULTIPLE-RESULT-SETS-ERROR.  The connection can then run other statements while the \
+        statement is still open.
+
+    With parameter arrays, the row counts of all parameter sets are added into one count.
+
+    @par Example:
+    @code{.py}
+# returns {"query0": {"id": (1, 2)}, "query1": 2}
+auto rv = db.exec("select id from t order by id; update t set flag = 1 where id < 3");
+    @endcode
+
+    Driver notes:
+    - SQL Server reports no row counts after <tt>SET NOCOUNT ON</tt>; \c PRINT and \c RAISERROR messages give
+      results without a row count, which are skipped
+    - FreeTDS runs a batch that is prepared (@ref Qore::SQL::SQLStatement "SQLStatement") or has bound
+      parameters as a remote procedure call and reports only the row count of its last statement, and no row
+      count before a result set; the Microsoft ODBC Driver for SQL Server reports every row count
+    - psqlODBC executes the whole batch when the SQL is executed, and raises the error of any statement then
+
     @section odbcdocumentation Documentation
 
     - @subpage odbccapabilitiesguide
