@@ -36,7 +36,8 @@
       total row count of a batch
     - Return the total row count of DML executed with parameter arrays; with drivers that report a row count for
       each parameter set, such as psqlODBC, only the first set's count was returned
-    - A program interrupt cancels a call waiting for a later result of a batch
+    - A program interrupt cancels an execution, a fetch, or a wait for a later result of a batch that is blocked
+      on the server (see @ref odbc_cancellation)
     - Preserve SQL NULL values in all-NULL, floating-point, and boolean parameter arrays
     - Allocate valid storage for empty-string and empty-binary arrays and scalar broadcasts
     - Check array buffer size arithmetic and cooperative cancellation while preparing string and binary arrays

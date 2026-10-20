@@ -803,6 +803,9 @@ QoreHashNode* ODBCStatement::getOutputHash(ExceptionSink* xsink, bool emptyHashI
     if (fetchResultColumnMetadata(xsink))
         return 0;
 
+    // a program interrupt cancels a blocked fetch or column read with SQLCancel()
+    ODBCCancelHelper cancelHelper(stmt);
+
     ReferenceHolder<QoreHashNode> h(new QoreHashNode(autoTypeInfo), xsink);
     std::vector<QoreListNode*> columns;
 
@@ -853,6 +856,9 @@ QoreColumnarResult* ODBCStatement::getOutputColumnar(ExceptionSink* xsink, int m
     if (fetchResultColumnMetadata(xsink)) {
         return nullptr;
     }
+
+    // a program interrupt cancels a blocked fetch or column read with SQLCancel()
+    ODBCCancelHelper cancelHelper(stmt);
 
     std::vector<std::unique_ptr<ODBCColumnarBuilder>> builders;
     builders.reserve(resColumns.size());
@@ -964,6 +970,10 @@ QoreColumnarResult* ODBCStatement::getOutputColumnar(ExceptionSink* xsink, int m
             }
 
             if (!SQL_SUCCEEDED(ret)) {
+                // a read cancelled by a program interrupt is reported as the cancellation
+                if (qore_check_cancel(xsink, "reading ODBC column values")) {
+                    return nullptr;
+                }
                 std::string s("error occured when getting value of row #%d column #%d");
                 ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
                 xsink->raiseException("DBI:ODBC:RESULT-ERROR", s.c_str(), readRows, column);
@@ -1007,6 +1017,9 @@ QoreListNode* ODBCStatement::getOutputList(ExceptionSink* xsink, int maxRows) {
     if (fetchResultColumnMetadata(xsink))
         return 0;
 
+    // a program interrupt cancels a blocked fetch or column read with SQLCancel()
+    ODBCCancelHelper cancelHelper(stmt);
+
     ReferenceHolder<QoreListNode> l(new QoreListNode(autoTypeInfo), xsink);
 
     int rowCount = 0;
@@ -1036,6 +1049,9 @@ QoreListNode* ODBCStatement::getOutputList(ExceptionSink* xsink, int maxRows) {
 QoreHashNode* ODBCStatement::getSingleRow(ExceptionSink* xsink) {
     if (fetchResultColumnMetadata(xsink))
         return 0;
+
+    // a program interrupt cancels a blocked fetch or column read with SQLCancel()
+    ODBCCancelHelper cancelHelper(stmt);
 
     GetRowInternStatus status;
     ReferenceHolder<QoreHashNode> h(getRowIntern(status, xsink), xsink);
@@ -1185,10 +1201,21 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
     }
 
     SQLRETURN ret;
-    if (str) {
-        ret = SQLExecDirectA(stmt, reinterpret_cast<SQLCHAR*>(const_cast<char*>(str)), textLen);
-    } else {
-        ret = SQLExecute(stmt);
+    {
+        // a program interrupt cancels the call with SQLCancel()
+        ODBCCancelHelper cancelHelper(stmt);
+        if (str) {
+            ret = SQLExecDirectA(stmt, reinterpret_cast<SQLCHAR*>(const_cast<char*>(str)), textLen);
+        } else {
+            ret = SQLExecute(stmt);
+        }
+    }
+
+    // a cancelled call is reported as the cancellation, not as the driver's "operation canceled" error
+    if (qore_check_cancel(xsink, "executing ODBC SQL")) {
+        discardResults();
+        affectedRowCount = -1;
+        return -1;
     }
 
     if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
@@ -1256,10 +1283,18 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
             }
 
             // Re-execute.
-            if (str) {
-                ret = SQLExecDirectA(stmt, reinterpret_cast<SQLCHAR*>(const_cast<char*>(str)), textLen);
-            } else {
-                ret = SQLExecute(stmt);
+            {
+                ODBCCancelHelper cancelHelper(stmt);
+                if (str) {
+                    ret = SQLExecDirectA(stmt, reinterpret_cast<SQLCHAR*>(const_cast<char*>(str)), textLen);
+                } else {
+                    ret = SQLExecute(stmt);
+                }
+            }
+            if (qore_check_cancel(xsink, "executing ODBC SQL")) {
+                discardResults();
+                affectedRowCount = -1;
+                return -1;
             }
             if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
                 QoreStringMaker err("error in statement execution (sql: '%s', ret: %d)", str ? str : "n/a", (int)ret);
@@ -1317,6 +1352,10 @@ SQLRETURN ODBCStatement::fetchRowIntern(ExceptionSink* xsink) {
     }
 
     if (!SQL_SUCCEEDED(ret)) {
+        // a fetch cancelled by a program interrupt is reported as the cancellation
+        if (!resultsDone && qore_check_cancel(xsink, "fetching ODBC rows")) {
+            return SQL_ERROR;
+        }
         QoreStringMaker desc("error occured when fetching row #%d", static_cast<int>(readRows));
         if (resultsDone) {
             desc.concat(doneFetchDiag.c_str());
@@ -4368,8 +4407,23 @@ SQLLEN* ODBCStatement::createIndArray(SQLLEN indicator, ExceptionSink* xsink) {
     return array;
 }
 
-#define ODBC_STR_BLOCK_SIZE 512
 QoreValue ODBCStatement::getColumnValue(int column, ODBCResultColumn& rcol, ExceptionSink* xsink) {
+    ValueHolder rv(getColumnValueIntern(column, rcol, xsink), xsink);
+    if (*xsink) {
+        // a read cancelled by a program interrupt (e.g. of a large value streamed with SQLGetData()) is reported
+        // as the cancellation, not as the driver's "operation canceled" error
+        ExceptionSink cancel;
+        if (qore_check_cancel(&cancel, "reading ODBC column values")) {
+            xsink->clear();
+            xsink->assimilate(cancel);
+        }
+        return QoreValue();
+    }
+    return rv.release();
+}
+
+#define ODBC_STR_BLOCK_SIZE 512
+QoreValue ODBCStatement::getColumnValueIntern(int column, ODBCResultColumn& rcol, ExceptionSink* xsink) {
     SQLLEN indicator = SQL_NULL_DATA;
     SQLRETURN ret = SQL_ERROR;
 

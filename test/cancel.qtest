@@ -6,9 +6,10 @@
 # Tests that a program interrupt ends an ODBC call that is blocked on the server.
 #
 # The blocked statement waits for a row lock that the test holds and never releases, so the call can only end by
-# being cancelled.  The test requests the interrupt only once the server is known to be executing the blocked
-# statement: the statement before it releases a lock that the test is waiting for.  No sleeps or timeouts are used.
-# Runs against SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+# being cancelled.  Where the server's progress can be observed, the test requests the interrupt only once the
+# server is executing the blocked statement: the statement before it releases a lock that the test is waiting for.
+# No sleeps or timeouts are used.
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
 
 %modern
 %no-child-restrictions
@@ -25,12 +26,19 @@ class OdbcCancelTest inherits QUnit::Test {
     private {
         *string connstr;
         *Datasource ds;
+        bool pg;
+        bool ms;
         string table = sprintf("odbc_cancel_%d_%d", getpid(), now_us() % 1000000000);
         string signal = sprintf("odbc_cancel_signal_%d_%d", getpid(), now_us() % 1000000000);
+        # the advisory lock key for PostgreSQL
+        int signalKey = now_us() % 1000000000;
     }
 
     constructor() : QUnit::Test("ODBC cancellation", "1.0", \ARGV) {
+        addTestCase("an interrupt cancels a blocked execution", \execution());
         addTestCase("an interrupt cancels a blocked later statement of a batch", \laterStatement());
+        addTestCase("an interrupt cancels a blocked fetch", \fetch());
+        addTestCase("an interrupt cancels a fetch waiting for the server", \serverFetch());
         set_return_value(main());
     }
 
@@ -41,7 +49,10 @@ class OdbcCancelTest inherits QUnit::Test {
         }
         ds = new Datasource(connstr);
         ds.open();
-        if (ds.getDriverRealName() !~ /SQL Server/i) {
+        string driver = ds.getDriverRealName();
+        pg = driver == "PostgreSQL";
+        ms = driver =~ /SQL Server/i;
+        if (!pg && !ms) {
             ds.close();
             remove ds;
             return;
@@ -52,8 +63,11 @@ class OdbcCancelTest inherits QUnit::Test {
         } catch (hash<ExceptionInfo> ex) {
             ds.rollback();
         }
-        ds.exec("create table " + table + " (a int primary key)");
-        ds.exec("insert into " + table + " values (1)");
+        # row 1 has a large value that is sent to the client while the server waits for the lock on row 2
+        ds.exec("create table " + table + " (a int primary key, v " + (pg ? "text" : "varchar(max)") + ")");
+        ds.exec("insert into " + table + " values (1, " + (pg ? "repeat('x', 262144)"
+            : "replicate(cast('x' as varchar(max)), 262144)") + ")");
+        ds.exec("insert into " + table + " values (2, 'y')");
         ds.commit();
     }
 
@@ -68,20 +82,42 @@ class OdbcCancelTest inherits QUnit::Test {
 
     setUp() {
         if (!ds) {
-            testSkip("QORE_DB_CONNSTR_ODBC does not give a SQL Server connection");
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
         }
     }
 
-    # runs the SQL in a sandboxed program while the test holds the row lock; returns what the call returned
-    private hash<auto> runBlocked(string sql) {
-        # hold the row lock that the last statement of the batch waits for
+    # SQL taking the signal lock for the session
+    private string lockSignal() {
+        return pg
+            ? sprintf("select pg_advisory_lock(%d)", signalKey)
+            : sprintf("exec sp_getapplock @Resource = '%s', @LockMode = 'Exclusive', @LockOwner = 'Session'", signal);
+    }
+
+    # SQL releasing the signal lock of the session
+    private string unlockSignal() {
+        return pg
+            ? sprintf("select pg_advisory_unlock(%d)", signalKey)
+            : sprintf("exec sp_releaseapplock @Resource = '%s', @LockOwner = 'Session'", signal);
+    }
+
+    # runs the SQL in a sandboxed program while the test holds the lock on row 2 and interrupts the program
+    /** @param sql the SQL to run
+        @param stmt run the SQL with SQLStatement::exec() and SQLStatement::fetchRows() instead of
+        Datasource::select()
+        @param waitSignal request the interrupt once the SQL has released the signal lock; otherwise once the
+        statement has been executed
+        @param workerConnstr the connection string for the SQL, if not the test's
+
+        @return the value or the exception of the call
+    */
+    private hash<auto> runBlocked(string sql, bool stmt, bool waitSignal, *string workerConnstr) {
         Datasource holder(connstr);
         holder.open();
         on_exit {
             holder.rollback();
             holder.close();
         }
-        holder.exec("update " + table + " set a = a where a = 1");
+        holder.exec("update " + table + " set a = a where a = 2");
 
         SandboxManager sm();
         Program p(PO_NO_CHILD_PO_RESTRICTIONS);
@@ -92,16 +128,22 @@ class OdbcCancelTest inherits QUnit::Test {
 %require-types
 %strict-args
 
-sub run(Queue q, string connstr, string signal, string sql) {
+sub run(Queue q, string connstr, string lock_sql, string sql, bool stmt) {
     try {
         Datasource ds(connstr);
         ds.open();
-        # the session holds the signal lock until the batch releases it
-        ds.exec(sprintf(\"exec sp_getapplock @Resource = '%s', @LockMode = 'Exclusive', @LockOwner = 'Session'\",
-            signal));
+        # the session holds the signal lock until the SQL releases it
+        ds.exec(lock_sql);
         q.push('ready');
-        auto rv = ds.select(sql);
-        q.push({'value': rv});
+        if (stmt) {
+            SQLStatement s(ds);
+            s.prepare(sql);
+            s.exec();
+            q.push('executed');
+            q.push({'value': s.fetchRows()});
+        } else {
+            q.push({'value': ds.select(sql)});
+        }
     } catch (hash<ExceptionInfo> ex) {
         q.push({'err': ex.err, 'desc': ex.desc});
     }
@@ -109,30 +151,76 @@ sub run(Queue q, string connstr, string signal, string sql) {
 ", "cancel");
 
         Queue q();
-        background p.callFunction("run", q, connstr, signal, sql);
+        background p.callFunction("run", q, workerConnstr ?? connstr, lockSignal(), sql, stmt);
         assertEq("ready", q.get());
 
-        # blocks until the batch has released the signal lock, i.e. until the server executes the blocked statement
         Datasource waiter(connstr);
-        waiter.open();
-        on_exit {
+        bool waiting;
+        on_exit if (waiting) {
             waiter.rollback();
             waiter.close();
         }
-        waiter.exec(sprintf("exec sp_getapplock @Resource = '%s', @LockMode = 'Exclusive', @LockOwner = 'Session'",
-            signal));
+        if (waitSignal) {
+            # blocks until the SQL has released the signal lock, i.e. until the server executes the blocked
+            # statement
+            waiter.open();
+            waiting = True;
+            waiter.exec(lockSignal());
+        } else {
+            auto v = q.get();
+            if (v != "executed") {
+                return v;
+            }
+        }
 
         sm.requestInterrupt();
-        return q.get();
+        auto rv = q.get();
+        # a statement that was executed before the signal
+        if (rv == "executed") {
+            rv = q.get();
+        }
+        return rv;
+    }
+
+    execution() {
+        # nothing is sent to the client before the blocked update, so the client is waiting in SQLExecDirect()
+        hash<auto> rv = runBlocked((ms ? "set nocount on; " : "") + unlockSignal() + "; update " + table
+            + " set a = a where a = 2", False, True);
+        assertEq("PROGRAM-INTERRUPTED", rv.err, sprintf("%y", rv));
     }
 
     laterStatement() {
+        if (!ms) {
+            testSkip("psqlODBC reads every result when the SQL is executed");
+        }
         # "raiserror ... with nowait" sends the first result to the client at once (the server would otherwise
         # keep it in its output buffer until the batch ends); the client then waits in SQLMoreResults() for the
         # update
         hash<auto> rv = runBlocked(sprintf("set nocount on; select 1 as a; raiserror('flush', 0, 1) with nowait; "
-            "exec sp_releaseapplock @Resource = '%s', @LockOwner = 'Session'; update %s set a = a where a = 1",
-            signal, table));
+            "%s; update %s set a = a where a = 2", unlockSignal(), table), False, True);
+        assertEq("PROGRAM-INTERRUPTED", rv.err, sprintf("%y", rv));
+    }
+
+    fetch() {
+        if (!ms) {
+            testSkip("psqlODBC reads every row when the SQL is executed");
+        }
+        # the server sends the first part of the large value of row 1 and waits for the lock on row 2; the client
+        # waits for the rest of the value
+        hash<auto> rv = runBlocked("select a, v from " + table + " order by a", True, False);
+        assertEq("PROGRAM-INTERRUPTED", rv.err, sprintf("%y", rv));
+    }
+
+    serverFetch() {
+        if (!pg) {
+            testSkip("PostgreSQL only: psqlODBC fetches rows from a cursor on the server with UseDeclareFetch");
+        }
+        # psqlODBC fetches each row from a server cursor; the select list of row 2 releases the signal lock just
+        # before the server waits for the lock on row 2 (rows are read one at a time, as there is no sort), so the
+        # client is waiting in SQLFetch()
+        string fetchConnstr = replace(connstr, "conn=", "conn=UseDeclareFetch=1;Fetch=1;");
+        hash<auto> rv = runBlocked(sprintf("select a, case when a = 2 then %s end as s from %s for update",
+            unlockSignal().substr(7), table), True, True, fetchConnstr);
         assertEq("PROGRAM-INTERRUPTED", rv.err, sprintf("%y", rv));
     }
 }

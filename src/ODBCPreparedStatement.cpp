@@ -26,6 +26,7 @@
 */
 
 #include "ODBCPreparedStatement.h"
+#include "ODBCCancelHelper.h"
 
 #include <sql.h>
 #include <sqlext.h>
@@ -124,6 +125,11 @@ QoreColumnarResult* ODBCPreparedStatement::fetchColumnar(int maxRows, ExceptionS
 #endif
 
 bool ODBCPreparedStatement::next(ExceptionSink* xsink) {
+    if (qore_check_cancel(xsink, "fetching ODBC rows")) {
+        return false;
+    }
+    // a program interrupt cancels a blocked fetch or column read with SQLCancel()
+    ODBCCancelHelper cancelHelper(stmt);
     GetRowInternStatus status;
     outputRow = getRowIntern(status, xsink);
     if (status == EGRIS_OK) {

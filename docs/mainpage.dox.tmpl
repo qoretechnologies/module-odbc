@@ -115,6 +115,15 @@ auto rv = db.exec("select id from t order by id; update t set flag = 1 where id 
       count before a result set; the Microsoft ODBC Driver for SQL Server reports every row count
     - psqlODBC executes the whole batch when the SQL is executed, and raises the error of any statement then
 
+    @section odbc_cancellation Cancelling Blocked Calls
+
+    A program interrupt (@ref Qore::SandboxManager::requestInterrupt() "SandboxManager::requestInterrupt()") ends
+    a call that waits for the server, for example for a lock: the driver cancels the execution, the wait for a
+    later result of a batch, or the fetch with \c SQLCancel(), and the call raises \c PROGRAM-INTERRUPTED.  A
+    thread cancellation request is raised as \c THREAD-CANCELLED before and after an execution or a wait for a
+    later result, and between fetched rows.  The work of a
+    cancelled statement is part of the current transaction; roll it back.
+
     @section odbcdocumentation Documentation
 
     - @subpage odbccapabilitiesguide

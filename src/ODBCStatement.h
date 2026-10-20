@@ -414,6 +414,9 @@ private:
      */
     DLLLOCAL QoreValue getColumnValue(int column, ODBCResultColumn& rcol, ExceptionSink* xsink);
 
+    //! Reads a column's value for getColumnValue()
+    DLLLOCAL QoreValue getColumnValueIntern(int column, ODBCResultColumn& rcol, ExceptionSink* xsink);
+
     //! Bind a list of values as an array.
     /** @param column ODBC column number, starting from 1
         @param lst parameter list
