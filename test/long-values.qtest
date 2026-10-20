@@ -1,0 +1,163 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that bound strings and binary values of any length reach the server unchanged, below and above the drivers'
+# maximum for character and binary parameters (8000 bytes with SQL Server, 255 for psqlODBC's character types).
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC;
+# multibyte text with SQL Server needs a database with a UTF-8 collation (and a UTF-8 client locale for the
+# Microsoft driver), as the strings are sent as character data in the database's code page.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class LongValuesTest
+
+class LongValuesTest inherits QUnit::Test {
+    private {
+        *Datasource ds;
+        bool pg;
+        bool utf8;
+        string table = sprintf("odbc_long_%d_%d", getpid(), now_us() % 1000000000);
+        # lengths in bytes around the drivers' limits
+        const Lengths = (10, 254, 255, 256, 7999, 8000, 8001, 100000);
+    }
+
+    constructor() : QUnit::Test("ODBC long values", "1.0", \ARGV) {
+        addTestCase("strings", \strings());
+        addTestCase("multibyte strings", \multibyteStrings());
+        addTestCase("binary values", \binaryValues());
+        addTestCase("arrays with long values", \arrays());
+        addTestCase("a long value for every row of an array", \broadcast());
+        addTestCase("SQLStatement with long values", \statement());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        *string connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            return;
+        }
+        ds = new Datasource(connstr);
+        ds.open();
+        string driver = ds.getDriverRealName();
+        pg = driver == "PostgreSQL";
+        if (!pg && driver !~ /SQL Server/i) {
+            ds.close();
+            remove ds;
+            return;
+        }
+        utf8 = pg || ds.selectRow("select convert(varchar(128), databasepropertyex(db_name(), 'Collation')) as c").c
+            =~ /UTF8/i;
+        try {
+            ds.exec("drop table " + table);
+            ds.commit();
+        } catch (hash<ExceptionInfo> ex) {
+            ds.rollback();
+        }
+        ds.exec(sprintf("create table %s (id int, s %s, b %s)", table, pg ? "text" : "varchar(max)",
+            pg ? "bytea" : "varbinary(max)"));
+        ds.commit();
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.exec("drop table " + table);
+            ds.commit();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
+        }
+    }
+
+    tearDown() {
+        if (ds) {
+            ds.rollback();
+        }
+    }
+
+    # inserts each value with its own statement and checks the stored values
+    private checkStrings(list<string> values) {
+        foreach string v in (values) {
+            ds.exec("insert into " + table + " (id, s) values (%v, %v)", $#, v);
+        }
+        list<auto> rows = ds.selectRows("select id, s from " + table + " order by id");
+        assertEq(values.size(), rows.size());
+        foreach hash<auto> row in (rows) {
+            # compares sizes first, so a truncated value is reported with its size
+            assertEq(values[row.id].size(), row.s.size(), sprintf("%d bytes", values[row.id].size()));
+            assertTrue(values[row.id] == row.s, sprintf("%d bytes", values[row.id].size()));
+        }
+    }
+
+    strings() {
+        checkStrings(map strmul("x", $1), Lengths);
+    }
+
+    multibyteStrings() {
+        if (!utf8) {
+            testSkip("SQL Server multibyte text needs a database with a UTF-8 collation");
+        }
+        # "ř" is two bytes in UTF-8
+        checkStrings(map strmul("ř", $1 / 2), Lengths);
+    }
+
+    binaryValues() {
+        list<binary> values = map binary(strmul("y", $1)), Lengths;
+        foreach binary v in (values) {
+            ds.exec("insert into " + table + " (id, b) values (%v, %v)", $#, v);
+        }
+        list<auto> rows = ds.selectRows("select id, b from " + table + " order by id");
+        assertEq(values.size(), rows.size());
+        foreach hash<auto> row in (rows) {
+            assertEq(values[row.id].size(), row.b.size(), sprintf("%d bytes", values[row.id].size()));
+            assertTrue(values[row.id] == row.b, sprintf("%d bytes", values[row.id].size()));
+        }
+    }
+
+    arrays() {
+        # the bound column size is the longest element
+        list<string> strs = ("short", strmul("x", 9000), "");
+        list<binary> bins = (<0102>, binary(strmul("y", 9000)), <03>);
+        ds.exec("insert into " + table + " (id, s, b) values (%v, %v, %v)", (0, 1, 2), strs, bins);
+        list<auto> rows = ds.selectRows("select id, s, b from " + table + " order by id");
+        assertEq((9000, 9000), (rows[1].s.size(), rows[1].b.size()));
+        assertEq(strs, (map $1.s ?? "", rows));
+        assertEq(bins, (map $1.b, rows));
+    }
+
+    broadcast() {
+        string s = strmul("z", 9000);
+        binary b = binary(s);
+        ds.exec("insert into " + table + " (id, s, b) values (%v, %v, %v)", (0, 1), s, b);
+        list<auto> rows = ds.selectRows("select id, s, b from " + table + " order by id");
+        assertEq(2, rows.size());
+        foreach hash<auto> row in (rows) {
+            assertEq((9000, 9000), (row.s.size(), row.b.size()));
+            assertTrue(row.s == s && row.b == b);
+        }
+    }
+
+    statement() {
+        SQLStatement stmt(ds);
+        on_exit stmt.close();
+        stmt.prepare("insert into " + table + " (id, s) values (%v, %v)");
+        foreach int len in (100, 9000, 100000) {
+            stmt.bindArgs(($#, strmul("q", len)));
+            stmt.exec();
+        }
+        assertEq((100, 9000, 100000), (map $1.n, ds.selectRows("select " + (pg ? "length(s)" : "len(s)")
+            + " as n from " + table + " order by id")));
+    }
+}

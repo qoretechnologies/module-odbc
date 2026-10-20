@@ -34,6 +34,7 @@
 #include "qore/QoreLib.h"
 #include "qore/DBI.h"
 
+#include "ODBCCancelHelper.h"
 #include "ODBCErrorHelper.h"
 #include "ODBCStatement.h"
 
@@ -505,6 +506,66 @@ int ODBCConnection::allocStatementHandle(SQLHSTMT& stmt, ExceptionSink* xsink) {
     }
 
     return 0;
+}
+
+SQLSMALLINT ODBCConnection::getBindType(SQLSMALLINT sqlType, size_t len, ExceptionSink* xsink) {
+    assert(sqlType == SQL_CHAR || sqlType == SQL_BINARY);
+    // every driver's character type supports 254 bytes (the ODBC minimum for CHAR), so short values never need the
+    // driver's limits
+    if (len <= 254) {
+        return sqlType;
+    }
+    if (!maxSizesKnown) {
+        maxCharSize = readMaxColumnSize(SQL_CHAR, xsink);
+        if (*xsink) {
+            return sqlType;
+        }
+        maxBinarySize = readMaxColumnSize(SQL_BINARY, xsink);
+        if (*xsink) {
+            return sqlType;
+        }
+        maxSizesKnown = true;
+    }
+    if (sqlType == SQL_CHAR) {
+        return maxCharSize && len > maxCharSize ? SQL_LONGVARCHAR : SQL_CHAR;
+    }
+    return maxBinarySize && len > maxBinarySize ? SQL_LONGVARBINARY : SQL_BINARY;
+}
+
+SQLULEN ODBCConnection::readMaxColumnSize(SQLSMALLINT sqlType, ExceptionSink* xsink) {
+    if (qore_check_cancel(xsink, "reading ODBC type information")) {
+        return 0;
+    }
+    SQLHSTMT stmt = SQL_NULL_HSTMT;
+    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt))) {
+        // no limit is known: the type is bound as before
+        return 0;
+    }
+    SQLULEN maxSize = 0;
+    SQLRETURN ret;
+    {
+        // SQL Server answers SQLGetTypeInfo() with a query on the server
+        ODBCCancelHelper cancelHelper(stmt);
+        ret = SQLGetTypeInfo(stmt, sqlType);
+        while (SQL_SUCCEEDED(ret)) {
+            ret = SQLFetch(stmt);
+            if (!SQL_SUCCEEDED(ret)) {
+                break;
+            }
+            // COLUMN_SIZE: the maximum length of the type; NULL if not applicable
+            SQLINTEGER size = 0;
+            SQLLEN indicator = SQL_NULL_DATA;
+            if (SQL_SUCCEEDED(SQLGetData(stmt, 3, SQL_C_SLONG, &size, 0, &indicator))
+                    && indicator != SQL_NULL_DATA && size > 0 && static_cast<SQLULEN>(size) > maxSize) {
+                maxSize = static_cast<SQLULEN>(size);
+            }
+        }
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    if (qore_check_cancel(xsink, "reading ODBC type information")) {
+        return 0;
+    }
+    return maxSize;
 }
 
 int ODBCConnection::envInit(ExceptionSink* xsink) {

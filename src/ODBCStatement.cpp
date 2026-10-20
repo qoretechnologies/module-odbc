@@ -1781,7 +1781,12 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
                     return -1;
                 }
                 SQLLEN* indPtr = paramHolder.addLength(len);
-                ret = SQLBindParameter(stmt, i + 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR,
+                // a value longer than the driver's maximum for SQL_CHAR is bound as SQL_LONGVARCHAR
+                SQLSMALLINT sqlType = conn->getBindType(SQL_CHAR, len, xsink);
+                if (*xsink) {
+                    return -1;
+                }
+                ret = SQLBindParameter(stmt, i + 1, SQL_PARAM_INPUT, SQL_C_CHAR, sqlType,
                     len, 0, reinterpret_cast<SQLCHAR*>(cstr), len, indPtr);
                 break;
             }
@@ -1846,8 +1851,13 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
                 const BinaryNode* b = arg.get<const BinaryNode>();
                 size_t len = b->size();
                 SQLLEN* indPtr = paramHolder.addLength(len);
+                // a value longer than the driver's maximum for SQL_BINARY is bound as SQL_LONGVARBINARY
+                SQLSMALLINT sqlType = conn->getBindType(SQL_BINARY, len, xsink);
+                if (*xsink) {
+                    return -1;
+                }
                 ret = SQLBindParameter(stmt, i + 1, SQL_PARAM_INPUT, SQL_C_BINARY,
-                    SQL_BINARY, len, 0, const_cast<void*>(b->getPtr()), len, indPtr);
+                    sqlType, len, 0, const_cast<void*>(b->getPtr()), len, indPtr);
                 break;
             }
             case NT_HASH: {
@@ -2151,7 +2161,12 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
             size_t maxlen;
             if (createArrayFromStringList(lst, array, indArray, maxlen, xsink))
                 return -1;
-            ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR,
+            // values longer than the driver's maximum for SQL_CHAR are bound as SQL_LONGVARCHAR
+            SQLSMALLINT sqlType = conn->getBindType(SQL_CHAR, maxlen, xsink);
+            if (*xsink) {
+                return -1;
+            }
+            ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_CHAR, sqlType,
                 maxlen, 0, reinterpret_cast<SQLCHAR*>(array), maxlen, indArray);
             break;
         }
@@ -2222,8 +2237,13 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
             size_t maxlen;
             if (createArrayFromBinaryList(lst, array, indArray, maxlen, xsink))
                 return -1;
+            // values longer than the driver's maximum for SQL_BINARY are bound as SQL_LONGVARBINARY
+            SQLSMALLINT sqlType = conn->getBindType(SQL_BINARY, maxlen, xsink);
+            if (*xsink) {
+                return -1;
+            }
             ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_BINARY,
-                SQL_BINARY, maxlen, 0, array, maxlen, indArray);
+                sqlType, maxlen, 0, array, maxlen, indArray);
             break;
         }
         default: {
@@ -2268,7 +2288,12 @@ int ODBCStatement::bindParamArraySingleValue(int column, QoreValue arg, Exceptio
             char* array;
             if (createArrayFromString(arg, array, indArray, len, xsink))
                 return -1;
-            ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR,
+            // a value longer than the driver's maximum for SQL_CHAR is bound as SQL_LONGVARCHAR
+            SQLSMALLINT sqlType = conn->getBindType(SQL_CHAR, len, xsink);
+            if (*xsink) {
+                return -1;
+            }
+            ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_CHAR, sqlType,
                 len, 0, reinterpret_cast<SQLCHAR*>(array), len, indArray);
             break;
         }
@@ -2338,8 +2363,13 @@ int ODBCStatement::bindParamArraySingleValue(int column, QoreValue arg, Exceptio
             void* array;
             if (createArrayFromBinary(arg.get<const BinaryNode>(), array, indArray, len, xsink))
                 return -1;
+            // a value longer than the driver's maximum for SQL_BINARY is bound as SQL_LONGVARBINARY
+            SQLSMALLINT sqlType = conn->getBindType(SQL_BINARY, len, xsink);
+            if (*xsink) {
+                return -1;
+            }
             ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_BINARY,
-                    SQL_BINARY, len, 0, array, len, indArray);
+                    sqlType, len, 0, array, len, indArray);
             break;
         }
         default: {

@@ -4,7 +4,7 @@
 
     Qore ODBC module
 
-    Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+    Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -149,6 +149,21 @@ public:
      */
     DLLLOCAL int allocStatementHandle(SQLHSTMT& stmt, ExceptionSink* xsink);
 
+    //! Returns the SQL type for binding a character or binary value of the given length
+    /** A value longer than the driver's maximum column size for \c SQL_CHAR or \c SQL_BINARY (8000 bytes with SQL
+        Server) is bound as \c SQL_LONGVARCHAR or \c SQL_LONGVARBINARY: drivers refuse a larger column size (the
+        Microsoft driver) or silently truncate the value to the maximum (FreeTDS).  The maximum is read from
+        SQLGetTypeInfo() once per connection, only when a value is longer than 254 bytes, which every driver's
+        character type supports; if the driver reports none, the type is not changed.
+
+        @param sqlType \c SQL_CHAR or \c SQL_BINARY
+        @param len the length of the value in bytes
+        @param xsink exception sink for cancellation
+
+        @return \a sqlType, or its long variant for a value longer than the driver's maximum
+     */
+    DLLLOCAL SQLSMALLINT getBindType(SQLSMALLINT sqlType, size_t len, ExceptionSink* xsink);
+
     //! Set an option for the connection.
     /** @param opt option name
         @param val option value to use
@@ -248,6 +263,16 @@ private:
 
     //! Version of the connected DBMS.
     int serverVer = 0;
+
+    //! Maximum column sizes of SQL_CHAR and SQL_BINARY parameters (0: none reported); see getBindType()
+    SQLULEN maxCharSize = 0;
+    SQLULEN maxBinarySize = 0;
+
+    //! Whether maxCharSize and maxBinarySize have been read from the driver
+    bool maxSizesKnown = false;
+
+    //! Reads the largest COLUMN_SIZE that SQLGetTypeInfo() reports for the type; 0 if none
+    DLLLOCAL SQLULEN readMaxColumnSize(SQLSMALLINT sqlType, ExceptionSink* xsink);
 
     //! Initialize environment.
     /** @param xsink exception sink
