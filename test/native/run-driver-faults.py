@@ -11,8 +11,8 @@ import tempfile
 
 # fault variable, expected trace counts (a disconnect is attempted exactly once per closed connection)
 SCENARIOS = (
-    ("ODBC_FAULT_NEED_DATA", {"ODBC_FAULT_TRACE data at execution for column 1": 1,
-                              "ODBC_FAULT_TRACE SQLDisconnect": 2}),
+    ("ODBC_FAULT_NEED_DATA", {"ODBC_FAULT_TRACE data at execution for column 1": 3,
+                              "ODBC_FAULT_TRACE SQLDisconnect": 4}),
     ("ODBC_FAULT_DISCONNECT", {"ODBC_FAULT_TRACE SQLDisconnect refused": 2}),
 )
 

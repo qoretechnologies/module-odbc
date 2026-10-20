@@ -12,6 +12,8 @@ class DriverFaultsTest inherits QUnit::Test {
     constructor() : QUnit::Test("ODBC driver faults", "1.0", \ARGV) {
         if (ENV.ODBC_FAULT_NEED_DATA == "1") {
             addTestCase("a connection with a statement left waiting for data closes", \needDataClose());
+            addTestCase("an execution waiting for data is cancelled with a clear error", \needDataError());
+            addTestCase("a SQLStatement waiting for data can be executed again", \needDataStatement());
         }
         if (ENV.ODBC_FAULT_DISCONNECT == "1") {
             addTestCase("a connection that the driver cannot disconnect closes without retrying", \disconnectRefused());
@@ -34,6 +36,54 @@ class DriverFaultsTest inherits QUnit::Test {
             ds.close();
         }
         assertEq({"a": (1,)}, ds.select("select 1 as a"));
+    }
+
+    private needDataError() {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        on_exit {
+            ds.rollback();
+            ds.close();
+        }
+        hash<ExceptionInfo> ex;
+        try {
+            ds.select("select %v as a", "__need_data__");
+        } catch (hash<ExceptionInfo> e) {
+            ex = e;
+        }
+        assertEq("ODBC-EXEC-ERROR", ex.err);
+        assertRegex("SQL_NEED_DATA", ex.desc ?? "");
+        # the connection can be used: nothing is left half-executed
+        assertEq({"a": (1,)}, ds.select("select 1 as a"));
+    }
+
+    private needDataStatement() {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        on_exit {
+            ds.rollback();
+            ds.close();
+        }
+        # the statement ends before the connection is closed (a SQLStatement destroyed after its Datasource was
+        # closed makes Qore open the connection again)
+        {
+            SQLStatement stmt(ds);
+            on_exit stmt.close();
+            stmt.prepare("select %v as a");
+            stmt.bindArgs(("__need_data__",));
+            hash<ExceptionInfo> ex;
+            try {
+                stmt.exec();
+            } catch (hash<ExceptionInfo> e) {
+                ex = e;
+            }
+            assertEq("ODBC-EXEC-ERROR", ex.err);
+            assertRegex("SQL_NEED_DATA", ex.desc ?? "");
+            # the statement returned to its state before the execution
+            stmt.bindArgs(("ok",));
+            stmt.exec();
+            assertEq(({"a": "ok"},), stmt.fetchRows());
+        }
     }
 
     private disconnectRefused() {

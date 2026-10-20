@@ -2,7 +2,8 @@
 // Driver fault interposer for the ODBC module's native regressions; preloaded only into a test process.
 //
 // ODBC_FAULT_NEED_DATA=1: a character parameter bound with the value "__need_data__" is bound for data at
-//     execution instead (a real SQL_DATA_AT_EXEC indicator), so the driver's execution returns SQL_NEED_DATA
+//     execution instead (a real SQL_DATA_AT_EXEC indicator, as SQL_LONGVARCHAR, the type that FreeTDS accepts
+//     data at execution for), so the driver's execution returns SQL_NEED_DATA
 // ODBC_FAULT_DISCONNECT=1: SQLDisconnect() fails without disconnecting, as a driver that cannot disconnect
 #include <sql.h>
 #include <sqlext.h>
@@ -33,7 +34,7 @@ extern "C" SQLRETURN SQL_API SQLBindParameter(SQLHSTMT stmt, SQLUSMALLINT column
             && *indicator == static_cast<SQLLEN>(sizeof(NeedDataMarker) - 1)
             && !std::memcmp(data, NeedDataMarker, sizeof(NeedDataMarker) - 1)) {
         std::fprintf(stderr, "ODBC_FAULT_TRACE data at execution for column %u\n", column);
-        return real(stmt, column, direction, ctype, sqltype, size, digits, data, buflen, &dataAtExec);
+        return real(stmt, column, direction, ctype, SQL_LONGVARCHAR, size, digits, data, buflen, &dataAtExec);
     }
     return real(stmt, column, direction, ctype, sqltype, size, digits, data, buflen, indicator);
 }

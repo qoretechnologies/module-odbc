@@ -51,6 +51,9 @@
     - Closing a connection no longer hangs when the driver refuses to disconnect: a statement still waiting for
       data is cancelled and freed, an active transaction is rolled back, and the connection is disconnected once;
       the driver was called again every 50 milliseconds without end
+    - An execution that the driver answers with \c SQL_NEED_DATA (the driver asking for parameter data at execution,
+      which this driver never binds) is cancelled and raises \c ODBC-EXEC-ERROR saying so; the statement was left
+      half-executed, which made it unusable and kept the connection from being used or closed
     - Build in C++17 mode, as the %Qore headers require; building from source needs a C++17 compiler
     - Preserve SQL NULL values in all-NULL, floating-point, and boolean parameter arrays
     - Allocate valid storage for empty-string and empty-binary arrays and scalar broadcasts

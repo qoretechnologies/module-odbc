@@ -1222,6 +1222,11 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
         return -1;
     }
 
+    if (ret == SQL_NEED_DATA) {
+        cancelNeedData(str, xsink);
+        return -1;
+    }
+
     if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
         char state[7];
         memset(state, 0, sizeof(state));
@@ -1300,6 +1305,10 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
                 affectedRowCount = -1;
                 return -1;
             }
+            if (ret == SQL_NEED_DATA) {
+                cancelNeedData(str, xsink);
+                return -1;
+            }
             if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) { // error
                 QoreStringMaker err("error in statement execution (sql: '%s', ret: %d)", str ? str : "n/a", (int)ret);
                 handleStmtError("ODBC-EXEC-ERROR", err.c_str(), xsink);
@@ -1329,6 +1338,20 @@ int ODBCStatement::execIntern(const char* str, SQLINTEGER textLen, ExceptionSink
     }
 
     return 0;
+}
+
+void ODBCStatement::cancelNeedData(const char* str, ExceptionSink* xsink) {
+    // no parameter is ever bound for data at execution, so the driver must not ask for data; SQLCancel() ends the
+    // data-at-execution sequence and returns the statement to its state before the execution, so it is neither left
+    // half-executed nor keeps the connection from being used or closed
+    SQLCancel(stmt);
+    SQLFreeStmt(stmt, SQL_CLOSE);
+    resultsDone = true;
+    doneFetchRet = SQL_NO_DATA;
+    doneFetchDiag.clear();
+    affectedRowCount = -1;
+    xsink->raiseException("ODBC-EXEC-ERROR", "the driver asked for parameter data at execution (SQL_NEED_DATA), "
+        "but no parameter is bound for data at execution; the execution was cancelled (sql: '%s')", str ? str : "n/a");
 }
 
 void ODBCStatement::setCurrentRowCount(SQLLEN count) {

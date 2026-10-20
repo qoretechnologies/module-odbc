@@ -281,6 +281,12 @@ protected:
     //! Discards any remaining results; the statement then returns no further rows
     DLLLOCAL void discardResults();
 
+    //! Cancels an execution for which the driver returned SQL_NEED_DATA and raises an exception
+    /** @param str the SQL text, or nullptr for a prepared statement
+        @param xsink exception sink
+     */
+    DLLLOCAL void cancelNeedData(const char* str, ExceptionSink* xsink);
+
     //! Return whether the passed arguments have arrays.
     DLLLOCAL bool hasArrays(const QoreListNode* args) const;
 
