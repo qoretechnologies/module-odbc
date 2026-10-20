@@ -1,0 +1,109 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that SQL text, object names and server messages appear unchanged in exception descriptions: they can contain
+# "%" characters, which must never be interpreted as format directives.
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class ErrorMessagesTest
+
+class ErrorMessagesTest inherits QUnit::Test {
+    private {
+        *string connstr;
+        *Datasource ds;
+        # an object name with format directives
+        const Name = "no_such_%s_%d_%x_%s";
+    }
+
+    constructor() : QUnit::Test("ODBC error messages", "1.0", \ARGV) {
+        addTestCase("an execution error shows the SQL and the server's message unchanged", \execError());
+        addTestCase("a connection error shows the server's message unchanged", \connectionError());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            return;
+        }
+        ds = new Datasource(connstr);
+        ds.open();
+        string driver = ds.getDriverRealName();
+        if (driver != "PostgreSQL" && driver !~ /SQL Server/i) {
+            ds.close();
+            remove ds;
+        }
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
+        }
+    }
+
+    tearDown() {
+        if (ds) {
+            ds.rollback();
+        }
+    }
+
+    # returns how often the text occurs in the string
+    private int occurrences(string str, string text) {
+        int count = 0;
+        int pos = 0;
+        while ((pos = str.find(text, pos)) >= 0) {
+            ++count;
+            pos += text.size();
+        }
+        return count;
+    }
+
+    execError() {
+        string sql = "select 1 from \"" + Name + "\"";
+        hash<ExceptionInfo> ex;
+        try {
+            ds.execRaw(sql);
+        } catch (hash<ExceptionInfo> e) {
+            ex = e;
+        }
+        assertEq("ODBC-EXEC-ERROR", ex.err);
+        # once in the SQL text and once in the server's message about the missing object
+        assertEq(2, occurrences(ex.desc, Name), ex.desc);
+        assertNeq(-1, ex.desc.find(sql), ex.desc);
+    }
+
+    connectionError() {
+        # the same connection to a database that does not exist
+        string bad = regex_subst(connstr, "Database=[^;}]*", "Database=" + Name, RE_Caseless);
+        if (bad == connstr) {
+            testSkip("the connection string has no Database keyword");
+        }
+        hash<ExceptionInfo> ex;
+        try {
+            Datasource bad_ds(bad);
+            bad_ds.open();
+        } catch (hash<ExceptionInfo> e) {
+            ex = e;
+        }
+        assertEq("ODBC-CONNECTION-ERROR", ex.err);
+        # in the connection string and in the server's message
+        assertGe(2, occurrences(ex.desc, Name), ex.desc);
+    }
+}

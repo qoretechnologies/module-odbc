@@ -4,7 +4,7 @@
 
   Qore ODBC module
 
-  Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+  Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
   Permission is hereby granted, free of charge, to any person obtaining a
   copy of this software and associated documentation files (the "Software"),
@@ -28,12 +28,13 @@
 #ifndef _QORE_MODULE_ODBC_ODBCERRORHELPER_H
 #define _QORE_MODULE_ODBC_ODBCERRORHELPER_H
 
+#include <cstdarg>
 #include <string>
 
 #include <sql.h>
 #include <sqlext.h>
 
-#include "qore/common.h"
+#include "qore/Qore.h"
 
 namespace odbc {
 
@@ -65,6 +66,38 @@ public:
             s += "): ";
             s += reinterpret_cast<char*>(text);
         }
+    }
+
+    //! Raises an exception: the formatted description followed by the ODBC diagnostic records of the handle
+    /** Only \a fmt is a format string: the diagnostics (which can contain SQL text and object names, and so any
+        \c % character) are added as text, as must be any SQL or driver text, which is passed as an argument.
+
+        @param xsink exception sink
+        @param err exception code
+        @param handleType type of the ODBC handle
+        @param handle ODBC handle
+        @param fmt format string for the description
+     */
+    DLLLOCAL static void raiseException(ExceptionSink* xsink, const char* err, SQLSMALLINT handleType,
+            SQLHANDLE handle, const char* fmt, ...)
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 5, 6)))
+#endif
+    {
+        QoreStringNodeHolder desc(new QoreStringNode);
+        while (true) {
+            va_list args;
+            va_start(args, fmt);
+            int rc = desc->vsprintf(fmt, args);
+            va_end(args);
+            if (!rc) {
+                break;
+            }
+        }
+        std::string diag;
+        extractDiag(handleType, handle, diag);
+        desc->concat(diag.c_str());
+        xsink->raiseException(err, desc.release());
     }
 
     //! Extract ODBC state for the first record.

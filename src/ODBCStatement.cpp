@@ -974,9 +974,7 @@ QoreColumnarResult* ODBCStatement::getOutputColumnar(ExceptionSink* xsink, int m
                 if (qore_check_cancel(xsink, "reading ODBC column values")) {
                     return nullptr;
                 }
-                std::string s("error occured when getting value of row #%d column #%d");
-                ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-                xsink->raiseException("DBI:ODBC:RESULT-ERROR", s.c_str(), readRows, column);
+                ODBCErrorHelper::raiseException(xsink, "DBI:ODBC:RESULT-ERROR", SQL_HANDLE_STMT, stmt, "error occured when getting value of row #%d column #%d", readRows, column);
                 return nullptr;
             }
 
@@ -1142,9 +1140,7 @@ void ODBCStatement::reset(ExceptionSink* xsink) {
 ///////////////////////////
 
 void ODBCStatement::handleStmtError(const char* err, const char* desc, ExceptionSink* xsink) {
-    std::string s(desc);
-    ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-    xsink->raiseException(err, s.c_str());
+    ODBCErrorHelper::raiseException(xsink, err, SQL_HANDLE_STMT, stmt, "%s", desc);
 }
 
 int ODBCStatement::resetAfterLostConnection(ExceptionSink* xsink) {
@@ -1399,12 +1395,9 @@ int ODBCStatement::nextResult(ExceptionSink* xsink) {
 
     if (!SQL_SUCCEEDED(ret)) {
         // a statement after the first one failed; raise its error like a failure of the first statement
-        QoreStringMaker desc("error in statement execution (sql: '%s', ret: %d)",
-            execSql.empty() ? "n/a" : execSql.c_str(), static_cast<int>(ret));
-        std::string diag;
-        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, diag);
-        desc.concat(diag.c_str());
-        xsink->raiseException("ODBC-EXEC-ERROR", "%s", desc.c_str());
+        ODBCErrorHelper::raiseException(xsink, "ODBC-EXEC-ERROR", SQL_HANDLE_STMT, stmt,
+            "error in statement execution (sql: '%s', ret: %d)", execSql.empty() ? "n/a" : execSql.c_str(),
+            static_cast<int>(ret));
         affectedRowCount = -1;
         discardResults();
         return -1;
@@ -1769,9 +1762,7 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
             SQLLEN* len = paramHolder.addLength(SQL_NULL_DATA);
             ret = SQLBindParameter(stmt, i + 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, 0, 0, 0, 0, len);
             if (!SQL_SUCCEEDED(ret)) { // error
-                std::string s("failed binding NULL parameter for column %u");
-                ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-                xsink->raiseException("ODBC-BIND-ERROR", s.c_str(), i + 1);
+                ODBCErrorHelper::raiseException(xsink, "ODBC-BIND-ERROR", SQL_HANDLE_STMT, stmt, "failed binding NULL parameter for column %u", i + 1);
                 return -1;
             }
             continue;
@@ -1977,9 +1968,7 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
         } // switch
 
         if (!SQL_SUCCEEDED(ret)) { // error
-            std::string s("failed binding parameter for column #%u of type '%s'");
-            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-            xsink->raiseException("ODBC-BIND-ERROR", s.c_str(), i + 1, arg.getTypeName());
+            ODBCErrorHelper::raiseException(xsink, "ODBC-BIND-ERROR", SQL_HANDLE_STMT, stmt, "failed binding parameter for column #%u of type '%s'", i + 1, arg.getTypeName());
             return -1;
         }
     } // for
@@ -2103,17 +2092,13 @@ int ODBCStatement::fetchResultColumnMetadata(ExceptionSink* xsink) {
         ret = SQLDescribeColA(stmt, i + 1, reinterpret_cast<SQLCHAR*>(name), 512, &nameLength, &col.dataType,
             &col.colSize, &col.decimalDigits, &col.nullable);
         if (!SQL_SUCCEEDED(ret)) { // error
-            std::string s("error occured when fetching result column metadata for column #%d");
-            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-            xsink->raiseException("ODBC-COLUMN-METADATA-ERROR", s.c_str(), i + 1);
+            ODBCErrorHelper::raiseException(xsink, "ODBC-COLUMN-METADATA-ERROR", SQL_HANDLE_STMT, stmt, "error occured when fetching result column metadata for column #%d", i + 1);
             return -1;
         }
 
         ret = SQLColAttributeA(stmt, i + 1, SQL_DESC_OCTET_LENGTH, 0, 0, 0, &col.byteSize);
         if (!SQL_SUCCEEDED(ret)) { // error
-            std::string s("error occured when fetching result column metadata with column #%d");
-            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-            xsink->raiseException("ODBC-COLUMN-METADATA-ERROR", s.c_str(), i + 1);
+            ODBCErrorHelper::raiseException(xsink, "ODBC-COLUMN-METADATA-ERROR", SQL_HANDLE_STMT, stmt, "error occured when fetching result column metadata with column #%d", i + 1);
             return -1;
         }
         if (!conn->preserveCase()) {
@@ -2249,9 +2234,7 @@ int ODBCStatement::bindParamArrayList(int column, const QoreListNode* lst, Excep
     } // switch
 
     if (!SQL_SUCCEEDED(ret)) { // error
-        std::string s("failed binding parameter array for column #%d");
-        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-        xsink->raiseException("ODBC-BIND-ERROR", s.c_str(), column);
+        ODBCErrorHelper::raiseException(xsink, "ODBC-BIND-ERROR", SQL_HANDLE_STMT, stmt, "failed binding parameter array for column #%d", column);
         return -1;
     }
 
@@ -2272,9 +2255,7 @@ int ODBCStatement::bindParamArraySingleValue(int column, QoreValue arg, Exceptio
 
         ret = SQLBindParameter(stmt, column, SQL_PARAM_INPUT, SQL_C_BINARY, SQL_BINARY, 0, 0, array, 0, indArray);
         if (!SQL_SUCCEEDED(ret)) { // error
-            std::string s("failed binding NULL single value parameter for column #%d");
-            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-            xsink->raiseException("ODBC-BIND-ERROR", s.c_str(), column);
+            ODBCErrorHelper::raiseException(xsink, "ODBC-BIND-ERROR", SQL_HANDLE_STMT, stmt, "failed binding NULL single value parameter for column #%d", column);
             return -1;
         }
         return 0;
@@ -2370,9 +2351,7 @@ int ODBCStatement::bindParamArraySingleValue(int column, QoreValue arg, Exceptio
     } // switch
 
     if (!SQL_SUCCEEDED(ret)) { // error
-        std::string s("failed binding parameter array for column #%d of type '%s'");
-        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-        xsink->raiseException("ODBC-BIND-ERROR", s.c_str(), column, arg.getTypeName());
+        ODBCErrorHelper::raiseException(xsink, "ODBC-BIND-ERROR", SQL_HANDLE_STMT, stmt, "failed binding parameter array for column #%d of type '%s'", column, arg.getTypeName());
         return -1;
     }
 
@@ -2484,9 +2463,7 @@ int ODBCStatement::bindParamArrayBindHash(int column, const QoreHashNode* h, Exc
     }
 
     if (!SQL_SUCCEEDED(ret)) { // error
-        std::string s("failed binding parameter array for column #%d");
-        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-        xsink->raiseException("ODBC-BIND-ERROR", s.c_str(), column);
+        ODBCErrorHelper::raiseException(xsink, "ODBC-BIND-ERROR", SQL_HANDLE_STMT, stmt, "failed binding parameter array for column #%d", column);
         return -1;
     }
 
@@ -4830,17 +4807,13 @@ QoreValue ODBCStatement::getColumnValueIntern(int column, ODBCResultColumn& rcol
             break;
         }
         default: {
-            std::string s("do not know how to handle result value of type '%d'");
-            ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-            xsink->raiseException("DBI:ODBC:RESULT-ERROR", s.c_str(), rcol.dataType);
+            ODBCErrorHelper::raiseException(xsink, "DBI:ODBC:RESULT-ERROR", SQL_HANDLE_STMT, stmt, "do not know how to handle result value of type '%d'", rcol.dataType);
             return 0;
         }
     }
 
     if (!SQL_SUCCEEDED(ret)) { // error
-        std::string s("error occured when getting value of row #%d column #%d");
-        ODBCErrorHelper::extractDiag(SQL_HANDLE_STMT, stmt, s);
-        xsink->raiseException("DBI:ODBC:RESULT-ERROR", s.c_str(), readRows, column);
+        ODBCErrorHelper::raiseException(xsink, "DBI:ODBC:RESULT-ERROR", SQL_HANDLE_STMT, stmt, "error occured when getting value of row #%d column #%d", readRows, column);
         return QoreValue();
     }
 

@@ -187,12 +187,11 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
     // Connect
     ret = SQLDriverConnectA(dbc, 0, (SQLCHAR*)connStr.c_str(), connStr.length(), 0, 0, 0, SQL_DRIVER_NOPROMPT);
     if (!SQL_SUCCEEDED(ret)) { // error
-        std::string s("could not connect to the datasource; connection string: '%s'");
-        ODBCErrorHelper::extractDiag(SQL_HANDLE_DBC, dbc, s);
         // NOTE: the connection string is sanitized to ensure that the password is never leaked
         // into the exception message
         QoreString safeConnStr(getSafeConnStr(connStr));
-        xsink->raiseException("ODBC-CONNECTION-ERROR", s.c_str(), safeConnStr.c_str());
+        ODBCErrorHelper::raiseException(xsink, "ODBC-CONNECTION-ERROR", SQL_HANDLE_DBC, dbc,
+            "could not connect to the datasource; connection string: '%s'", safeConnStr.c_str());
         return -1;
     }
     connected = true;
@@ -875,9 +874,7 @@ void ODBCConnection::handleDbcError(const char* err, const char* desc, Exception
     if (!xsink) {
         return;
     }
-    std::string s(desc);
-    ODBCErrorHelper::extractDiag(SQL_HANDLE_DBC, dbc, s);
-    xsink->raiseException(err, s.c_str());
+    ODBCErrorHelper::raiseException(xsink, err, SQL_HANDLE_DBC, dbc, "%s", desc);
 }
 
 void ODBCConnection::deadConnectionError(ExceptionSink* xsink) {
