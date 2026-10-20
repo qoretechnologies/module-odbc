@@ -29,3 +29,19 @@ To run only the injected failure against an existing configured database::
 The helper builds the interposer in a temporary directory and preloads it only
 into its test subprocess. It checks the exact binding trace as well as the
 QUnit assertions; unexpected extra binding calls fail qualification.
+
+Driver fault regressions
+------------------------
+
+``driver-faults.cpp`` is a second interposer, selected by environment variables:
+``ODBC_FAULT_NEED_DATA=1`` binds a character parameter whose value is
+``__need_data__`` for data at execution (a real ``SQL_DATA_AT_EXEC``
+indicator), so the driver answers the execution with ``SQL_NEED_DATA``;
+``ODBC_FAULT_DISCONNECT=1`` makes ``SQLDisconnect`` fail without disconnecting.
+``run-driver-faults.py`` builds it and runs ``driver-faults.qtest`` once per
+fault, each with a 60 second limit so that a hang fails, and checks how often
+``SQLDisconnect`` is called: exactly once per closed connection. It runs with
+any configured database::
+
+    export QORE_DB_CONNSTR_ODBC='odbc:database connection string'
+    python3 -B -W error test/native/run-driver-faults.py "$QORE_ODBC_BINARY_MODULE"

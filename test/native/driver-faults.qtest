@@ -1,0 +1,49 @@
+#!/usr/bin/env qore
+# Copyright 2026 Qore Technologies, s.r.o.; SPDX-License-Identifier: MIT
+# Runs with the driver fault interposer (driver-faults.cpp) preloaded by run-driver-faults.py; the fault is selected
+# with ODBC_FAULT_NEED_DATA or ODBC_FAULT_DISCONNECT.
+%modern
+%requires QUnit
+%prepend-module-path "${SCRIPT_DIR}/../../build"
+%requires odbc
+%exec-class DriverFaultsTest
+
+class DriverFaultsTest inherits QUnit::Test {
+    constructor() : QUnit::Test("ODBC driver faults", "1.0", \ARGV) {
+        if (ENV.ODBC_FAULT_NEED_DATA == "1") {
+            addTestCase("a connection with a statement left waiting for data closes", \needDataClose());
+        }
+        if (ENV.ODBC_FAULT_DISCONNECT == "1") {
+            addTestCase("a connection that the driver cannot disconnect closes without retrying", \disconnectRefused());
+        }
+        set_return_value(main());
+    }
+
+    private needDataClose() {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        # the driver asks for the parameter's data at execution
+        assertThrows("ODBC-EXEC-ERROR", \ds.select(), ("select %v as a", "__need_data__"));
+        ds.rollback();
+        # the statement must not keep the connection from closing
+        ds.close();
+        # a new connection works
+        ds.open();
+        on_exit {
+            ds.rollback();
+            ds.close();
+        }
+        assertEq({"a": (1,)}, ds.select("select 1 as a"));
+    }
+
+    private disconnectRefused() {
+        foreach int i in (xrange(2)) {
+            Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+            ds.open();
+            assertEq({"a": (1,)}, ds.select("select 1 as a"), sprintf("connection %d", i));
+            ds.rollback();
+            # SQLDisconnect() fails: the close returns after one attempt
+            ds.close();
+        }
+    }
+}

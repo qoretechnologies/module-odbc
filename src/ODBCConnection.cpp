@@ -200,42 +200,55 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
     return 0;
 }
 
-void ODBCConnection::disconnect() {
-    while (connected) {
-        // Check for interrupt in disconnect retry loop
-        if (qore_check_cancel(nullptr, "ODBC disconnect")) {
-            // Force disconnect on interrupt
-            connected = false;
-            break;
-        }
+void ODBCConnection::releaseStatementHandleLater(SQLHSTMT stmt) noexcept {
+    assert(stmt != SQL_NULL_HSTMT);
+    // called from statement destructors: if the handle cannot be stored, it can only stay allocated
+    try {
+        unreleasedStatements.push_back(stmt);
+    } catch (...) {
+    }
+}
 
-        SQLRETURN ret = SQLDisconnect(dbc);
+int ODBCConnection::disconnect() {
+    if (!connected) {
+        return 0;
+    }
+    // the connection is never disconnected twice, whatever the driver answers
+    connected = false;
+
+    // a statement that is still executing or waiting for data makes SQLDisconnect() fail with HY010; such
+    // statements were handed over when the driver refused to free them
+    for (SQLHSTMT stmt : unreleasedStatements) {
+        SQLCancel(stmt);
+        SQLFreeStmt(stmt, SQL_CLOSE);
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    }
+    unreleasedStatements.clear();
+
+    SQLRETURN ret = SQLDisconnect(dbc);
+    if (SQL_SUCCEEDED(ret)) {
+        return 0;
+    }
+
+    char state[7];
+    memset(state, 0, sizeof(state));
+    ODBCErrorHelper::extractState(SQL_HANDLE_DBC, dbc, state);
+    // 08003: the connection is not open
+    if (!strncmp(state, "08003", 5)) {
+        return 0;
+    }
+    // 25000: a transaction is still active; it is rolled back, as the server does when a connection is closed
+    if (!strncmp(state, "25000", 5)) {
+        SQLEndTran(SQL_HANDLE_DBC, dbc, SQL_ROLLBACK);
+        activeTransaction = false;
+        ret = SQLDisconnect(dbc);
         if (SQL_SUCCEEDED(ret)) {
-            connected = false;
-        } else {
-            char state[7];
-            memset(state, 0, sizeof(state));
-            ODBCErrorHelper::extractState(SQL_HANDLE_DBC, dbc, state);
-            //fprintf(stderr, "state: %s\n", state);
-            if (strncmp(state, "08003", 5) == 0) { // Connection not open.
-                connected = false;
-            } else if (strncmp(state, "HY000", 5) == 0) { // General error.
-                connected = false;
-            } else if (strncmp(state, "HYT01", 5) == 0) { // Connection timeout expired.
-                connected = false;
-            } else if (strncmp(state, "HY117", 5) == 0) { // Connection is suspended due to unknown transaction state. Only disconnect and read-only functions are allowed.
-                connected = false;
-            } else if (strncmp(state, "25000", 5) == 0) { // Transaction still active.
-                if (!activeTransaction) {
-                    if (isDead)
-                        isDead = false;
-                    rollback(0);
-                }
-            } else {
-                qore_usleep(50*1000); // Sleep in intervals of 50 ms until disconnected.
-            }
+            return 0;
         }
     }
+
+    // the driver cannot disconnect: the connection handle stays allocated, as a connected handle cannot be freed
+    return -1;
 }
 
 int ODBCConnection::commit(ExceptionSink* xsink) {

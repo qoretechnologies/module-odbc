@@ -34,6 +34,7 @@
 #include <sqlext.h>
 
 #include <string>
+#include <vector>
 
 #include "qore/Qore.h"
 #include <qore/QoreSandboxManager.h>
@@ -71,7 +72,20 @@ public:
     DLLLOCAL int connect(ExceptionSink* xsink);
 
     //! Disconnect the connection.
-    DLLLOCAL void disconnect();
+    /** Disconnects once and never retries.  Statement handles that the driver refused to free are cancelled and
+        freed first, and a transaction that is still active is rolled back, as the server does when a connection
+        is closed.  If the driver still refuses, the connection handle is kept allocated (ODBC does not allow
+        freeing a connected handle) and the connection is treated as closed.
+
+        No exception can be raised: the DBI close callback has no exception sink, and after a lost connection the
+        driver reconnects transparently.
+
+        @return 0 if disconnected, -1 if the driver refused
+     */
+    DLLLOCAL int disconnect();
+
+    //! Takes a statement handle that the driver refused to free; it is cancelled and freed before disconnecting
+    DLLLOCAL void releaseStatementHandleLater(SQLHSTMT stmt) noexcept;
 
     //! Commit an ODBC transaction.
     /** @param xsink exception sink
@@ -239,6 +253,9 @@ private:
 
     //! Whether an ODBC connection has been opened.
     bool connected = false;
+
+    //! Statement handles that the driver refused to free; see releaseStatementHandleLater()
+    std::vector<SQLHSTMT> unreleasedStatements;
 
     //! Whether the ODBC connection is dead.
     bool isDead = false;

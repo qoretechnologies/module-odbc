@@ -19,4 +19,5 @@ done
 if test "${2:-}" = --native; then
     test -f "$module"
     python3 -B -W error "$1/native/run-bind-failure.py" "$module"
+    python3 -B -W error "$1/native/run-driver-faults.py" "$module"
 fi

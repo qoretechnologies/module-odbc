@@ -780,7 +780,15 @@ QoreHashNode* ODBCStatement::describe(ExceptionSink* xsink) {
 void ODBCStatement::freeStatementHandle() {
     if (stmt != SQL_NULL_HSTMT) {
         SQLCloseCursor(stmt);
-        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        if (!SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_STMT, stmt))) {
+            // the driver refuses to free a statement that is still executing or waiting for data (HY010); it is
+            // cancelled first, and if it still cannot be freed, the connection frees it before disconnecting, as
+            // the statement would otherwise keep the connection from being disconnected
+            SQLCancel(stmt);
+            if (!SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_STMT, stmt))) {
+                conn->releaseStatementHandleLater(stmt);
+            }
+        }
         stmt = SQL_NULL_HSTMT;
     }
 }
