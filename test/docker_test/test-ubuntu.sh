@@ -59,6 +59,10 @@ echo "export QORE_GID=999" >> ${ENV_FILE}
 
 export MAKE_JOBS=4
 
+# the tests must load the driver of this tree: reject relative module paths in them, and require the build directory
+# in the module path of every test that loads the driver
+${MODULE_SRC_DIR}/test/docker_test/check-module-paths.sh odbc
+
 # build module and install
 echo && echo "-- building module --"
 mkdir -p ${MODULE_SRC_DIR}/build
