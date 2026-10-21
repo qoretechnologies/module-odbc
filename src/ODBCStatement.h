@@ -108,6 +108,21 @@ public:
      */
     DLLLOCAL int advanceToResultSet(ExceptionSink* xsink);
 
+    //! Raises an exception if the execution has no result set and the driver refuses to fetch from its first result
+    /** Call after advanceToResultSet().  Whether there is a result set is read from the result metadata (result
+        columns).  Most drivers refuse to fetch from a row-count result (SQLSTATE 24000, invalid cursor state);
+        the call then raises \a err ("SQL passed to <call> did not return a result set") instead of the driver's
+        error.  With a driver that returns no rows then (psqlODBC, after a statement that affected rows), nothing
+        is raised and the call returns no rows, as for a single statement.
+
+        @param err the exception code, ex: \c ODBC-SELECT-ROWS-ERROR
+        @param call the call for the exception description, ex: \c "selectRows()"
+        @param xsink exception sink
+
+        @return 0 for OK, -1 for error (exception raised)
+     */
+    DLLLOCAL int checkResultSet(const char* err, const char* call, ExceptionSink* xsink);
+
     //! Returns every result of the execution in the format of Datasource::exec() and Datasource::select()
     /** One result is returned as before: a hash of column lists for a result set, otherwise the row count.
 

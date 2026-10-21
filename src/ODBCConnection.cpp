@@ -336,8 +336,10 @@ QoreListNode* ODBCConnection::selectRows(const QoreString* qstr, const QoreListN
         return nullptr;
 
     res.setSingleResultSet();
-    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink))
+    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink)
+        || res.checkResultSet("ODBC-SELECT-ROWS-ERROR", "selectRows()", xsink)) {
         return nullptr;
+    }
 
     return res.getOutputList(xsink);
 }
@@ -350,7 +352,8 @@ QoreValue ODBCConnection::selectRowsTyped(const QoreString* qstr, const QoreList
     }
 
     res.setSingleResultSet();
-    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink)) {
+    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink)
+        || res.checkResultSet("ODBC-SELECT-ROWS-ERROR", "selectRowsTyped()", xsink)) {
         return QoreValue();
     }
 
@@ -375,8 +378,10 @@ QoreHashNode* ODBCConnection::selectRow(const QoreString* qstr, const QoreListNo
         return nullptr;
 
     res.setSingleResultSet();
-    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink))
+    if (res.exec(qstr, args, xsink) || res.advanceToResultSet(xsink)
+        || res.checkResultSet("ODBC-SELECT-ROW-ERROR", "selectRow()", xsink)) {
         return nullptr;
+    }
 
     return res.getSingleRow(xsink);
 }

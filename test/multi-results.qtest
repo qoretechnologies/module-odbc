@@ -40,6 +40,7 @@ class MultiResultsTest inherits QUnit::Test {
         addTestCase("one-result-set calls return the only result set", \oneResultSet());
         addTestCase("one-result-set calls refuse a second result set", \multipleResultSets());
         addTestCase("one-result-set calls without a result set behave as for one statement", \noResultSet());
+        addTestCase("one-result-set calls without a result set raise a clear error", \noResultSetError());
         addTestCase("typed results of a batch", \typedResults());
         addTestCase("array binding gives the total row count", \arrayRowCounts());
         addTestCase("SQLStatement totals the row counts", \statementRowCounts());
@@ -242,8 +243,8 @@ class MultiResultsTest inherits QUnit::Test {
     }
 
     noResultSet() {
-        # the outcome is the same as for one row-count statement on the same driver (no rows, or the driver's
-        # "invalid cursor state" error)
+        # the outcome is the same as for one row-count statement on the same driver (no rows, or
+        # ODBC-SELECT-ROWS-ERROR / ODBC-SELECT-ROW-ERROR where the driver refuses to fetch from a row-count result)
         foreach string api in ("selectRows", "selectRow", "selectRowsTyped", "selectColumnar") {
             hash<auto> one = outcome(auto sub () {
                 return call_object_method(ds, api, "insert into " + table + " values (5)");
@@ -263,6 +264,36 @@ class MultiResultsTest inherits QUnit::Test {
             ds.rollback();
             assertEq("ODBC-EXEC-ERROR", err.err, api);
             assertRegex(dupKey, err.desc ?? "", api);
+        }
+    }
+
+    noResultSetError() {
+        # a driver that refuses to fetch from a row-count result ("invalid cursor state") gives the error of the
+        # call: SQL Server drivers always, psqlODBC after a statement that changed no rows; psqlODBC returns no
+        # rows after a statement that changed rows
+        hash<string, string> errs = {
+            "selectRows": "ODBC-SELECT-ROWS-ERROR",
+            "selectRowsTyped": "ODBC-SELECT-ROWS-ERROR",
+            "selectRow": "ODBC-SELECT-ROW-ERROR",
+        };
+        list<string> sqls = (
+            "update " + table + " set a = a where a = 99",
+            "update " + table + " set a = a where a = 99; update " + table + " set a = a where a = 98",
+            "insert into " + table + " values (5)",
+            "insert into " + table + " values (5); insert into " + table + " values (6)",
+        );
+        foreach hash<auto> i in (errs.pairIterator()) {
+            string api = i.key;
+            foreach string sql in (sqls) {
+                hash<auto> o = outcome(auto sub () { return call_object_method(ds, api, sql); });
+                ds.rollback();
+                if (pg && sql =~ /^insert/) {
+                    assertEq({"value": api == "selectRow" ? NOTHING : ()}, o, api + ": " + sql);
+                } else {
+                    assertEq({"err": i.value, "desc": "SQL passed to " + api + "() did not return a result set"}, o,
+                        api + ": " + sql);
+                }
+            }
         }
     }
 

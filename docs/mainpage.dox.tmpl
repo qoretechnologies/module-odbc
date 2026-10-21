@@ -90,7 +90,8 @@ major_version * 1000000 + minor_version * 10000 + sub_version
         @ref Qore::SQL::Datasource::selectRow() "Datasource::selectRow()", \
         @ref Qore::SQL::Datasource::selectColumnar() "Datasource::selectColumnar()"|Row counts are skipped and the \
         only result set is returned.  A second result set raises \c ODBC-MULTIPLE-RESULT-SETS-ERROR.  Without a \
-        result set, the call behaves as for a single statement that returns none.
+        result set, the call behaves as for a single statement that returns none, which depends on the ODBC driver \
+        (see the table below); \c selectColumnar() raises \c COLUMNAR-RESULT-ERROR.
     |@ref Qore::SQL::SQLStatement "SQLStatement"|@ref Qore::SQL::SQLStatement::exec() "SQLStatement::exec()" \
         reads the row counts before the first result set, raising the error of a failing statement, and \
         @ref Qore::SQL::SQLStatement::affectedRows() "SQLStatement::affectedRows()" returns the total of all row \
@@ -100,6 +101,19 @@ major_version * 1000000 + minor_version * 10000 + sub_version
         statement is still open.
 
     With parameter arrays, the row counts of all parameter sets are added into one count.
+
+    SQL without a result set passed to @ref Qore::SQL::Datasource::selectRows() "Datasource::selectRows()",
+    @ref Qore::SQL::Datasource::selectRowsTyped() "Datasource::selectRowsTyped()" or
+    @ref Qore::SQL::Datasource::selectRow() "Datasource::selectRow()" gives what fetching from its first row count
+    gives with the ODBC driver: where the driver refuses that fetch, \c selectRows() and \c selectRowsTyped() raise
+    \c ODBC-SELECT-ROWS-ERROR and \c selectRow() raises \c ODBC-SELECT-ROW-ERROR ("SQL passed to selectRows()
+    did not return a result set"); otherwise the call returns no rows (an empty list, or no value from
+    \c selectRow()).  For a batch, its first statement decides:
+
+    |!ODBC driver|!First statement changed rows|!First statement changed no rows
+    |Microsoft ODBC Driver for SQL Server|error|error
+    |FreeTDS|error|error
+    |psqlODBC|no rows|error
 
     @par Example:
     @code{.py}

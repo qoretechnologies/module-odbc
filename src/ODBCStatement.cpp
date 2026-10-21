@@ -1512,6 +1512,15 @@ int ODBCStatement::advanceToResultSet(ExceptionSink* xsink) {
     }
 }
 
+int ODBCStatement::checkResultSet(const char* err, const char* call, ExceptionSink* xsink) {
+    // a result set has result columns; without one, doneFetchRet is what a fetch from the first result returned
+    if (hasResultData() || doneFetchRet == SQL_NO_DATA) {
+        return 0;
+    }
+    xsink->raiseException(err, "SQL passed to %s did not return a result set", call);
+    return -1;
+}
+
 QoreValue ODBCStatement::getResultSetValue(bool typed, ExceptionSink* xsink) {
     ReferenceHolder<QoreHashNode> columns(getOutputHash(xsink, false), xsink);
     if (*xsink || !columns) {

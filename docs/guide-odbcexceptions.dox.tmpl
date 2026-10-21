@@ -23,7 +23,8 @@
     |\c ODBC-PARSE-ERROR|Invalid SQL specification|Malformed SQL, invalid placeholder syntax|Check SQL syntax and placeholder formatting
     |\c ODBC-STATEMENT-ALLOC-ERROR|Cannot allocate a statement handle|Resource exhaustion, too many open statements|Close unused statements, check for statement handle leaks
     |\c ODBC-FETCH-ERROR|Error fetching data from result set|Connection lost during fetch, data conversion error|Check connection stability, verify data type compatibility
-    |\c ODBC-SELECT-ROW-ERROR|selectRow() returned more than one row|Query returned multiple rows when only one was expected|Add LIMIT 1 to query or refine WHERE clause to ensure single row result
+    |\c ODBC-SELECT-ROW-ERROR|selectRow() returned more than one row, or the SQL passed to it did not return a result set and the ODBC driver refuses to fetch from a row count (see @ref odbc_multiple_results)|Query returned multiple rows when only one was expected; DML or DDL passed to selectRow()|Add LIMIT 1 to query or refine WHERE clause to ensure single row result; use Datasource::exec() for SQL without a result set
+    |\c ODBC-SELECT-ROWS-ERROR|The SQL passed to selectRows() or selectRowsTyped() did not return a result set and the ODBC driver refuses to fetch from a row count (see @ref odbc_multiple_results)|DML or DDL passed to selectRows()|Use Datasource::exec() for SQL without a result set
     |\c ODBC-MULTIPLE-RESULT-SETS-ERROR|SQL returned more than one result set to a call that returns one (Datasource::selectRows(), selectRowsTyped(), selectRow(), selectColumnar(), or SQLStatement)|A batch or stored procedure with several queries|Use Datasource::select() or Datasource::exec() to retrieve every result (see @ref odbc_multiple_results)
 
     @section odbc_binding_errors Binding Errors

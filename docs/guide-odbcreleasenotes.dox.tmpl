@@ -31,6 +31,12 @@
       return every result set and row count, and calls that return one result set raise
       \c ODBC-MULTIPLE-RESULT-SETS-ERROR for a second result set instead of discarding it
       (see @ref odbc_multiple_results)
+    - SQL without a result set passed to @ref Qore::SQL::Datasource::selectRows() "Datasource::selectRows()",
+      @ref Qore::SQL::Datasource::selectRowsTyped() "Datasource::selectRowsTyped()" or
+      @ref Qore::SQL::Datasource::selectRow() "Datasource::selectRow()" raises \c ODBC-SELECT-ROWS-ERROR or
+      \c ODBC-SELECT-ROW-ERROR ("SQL passed to selectRows() did not return a result set") where the ODBC driver
+      refuses to fetch from a row count; it raised \c ODBC-FETCH-ERROR with the driver's "invalid cursor state"
+      error; where the driver returns no rows, no rows are returned as before
     - A @ref Qore::SQL::SQLStatement "SQLStatement" no longer leaves a SQL Server connection busy after its result
       set has been read; @ref Qore::SQL::SQLStatement::affectedRows() "SQLStatement::affectedRows()" returns the
       total row count of a batch
