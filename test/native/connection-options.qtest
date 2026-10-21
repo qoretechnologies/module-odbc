@@ -1,0 +1,40 @@
+#!/usr/bin/env qore
+# Copyright 2026 Qore Technologies, s.r.o.; SPDX-License-Identifier: MIT
+%modern
+%requires QUnit
+%prepend-module-path "${SCRIPT_DIR}/../../build"
+%requires odbc
+%exec-class ConnectionOptionsTest
+
+class ConnectionOptionsTest inherits QUnit::Test {
+    constructor() : Test("ODBC connection option failures", "1.0", \ARGV) {
+        addTestCase("driver refusal and coercion before connecting", \check());
+        set_return_value(main());
+    }
+    check() {
+        foreach hash<auto> attribute in ({"id": 102, "option": ""},
+                {"id": 103, "option": "login-timeout"}, {"id": 113, "option": "connection-timeout"}) {
+            setenv("ODBC_TEST_ATTRIBUTE", attribute.id);
+            foreach bool info in (False, True) {
+                if (info) {
+                    setenv("ODBC_TEST_INFO", "1");
+                } else {
+                    unsetenv("ODBC_TEST_INFO");
+                }
+                foreach bool explicit in (False, True) {
+                    if (!attribute.option && !explicit) {
+                        continue;
+                    }
+                    foreach string value in (explicit && attribute.option ? ("0", "1", "4294967295") : ("1",)) {
+                        hash<auto> options = {"conn": "DRIVER=unused"};
+                        if (explicit && attribute.option) {
+                            options{attribute.option} = value;
+                        }
+                        Datasource ds({"type": "odbc", "options": options});
+                        assertThrows(explicit ? "ODBC-CONNECTION-OPTION-ERROR" : "ODBC-CONNECTION-ERROR", \ds.open());
+                    }
+                }
+            }
+        }
+    }
+}

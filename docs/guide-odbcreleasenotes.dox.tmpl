@@ -23,6 +23,9 @@
       including dense buffers for integer, floating-point, and safe numeric/decimal columns
 
     @subsection odbcv2_fixes Bug Fixes
+    - validated timeout syntax and range, accepted zero explicitly, and checked connection attribute errors
+    - requested native connection cancellation and preserved pending Qore cancellation after native connection returns
+
 
     - Read every result of SQL that returns more than one result, such as a batch of statements or a stored
       procedure; previously only the first result was read, so later result sets and row counts were lost and,

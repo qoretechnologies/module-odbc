@@ -27,6 +27,10 @@
 
 #include "ODBCConnection.h"
 
+#include <charconv>
+#include <limits>
+#include <cstdint>
+
 #if defined(QDBI_METHOD_SELECT_COLUMNAR) || defined(QDBI_METHOD_STMT_FETCH_COLUMNAR)
 #include <qore/QoreColumnarResult.h>
 #endif
@@ -174,11 +178,27 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
         return -1;
     }
 
-    // Set connection attributes.
-    SQLSetConnectAttr(dbc, SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF, SQL_IS_UINTEGER);
+    // Transaction mode is required. Timeout defaults are best effort for drivers that do not
+    // support them, but an explicitly requested timeout must never be silently rejected.
+    auto set_attribute = [&](SQLINTEGER attr, SQLUINTEGER value, const char* name, bool required) -> bool {
+        SQLRETURN rc = SQLSetConnectAttr(dbc, attr, reinterpret_cast<SQLPOINTER>(static_cast<uintptr_t>(value)),
+            SQL_IS_UINTEGER);
+        if (required && rc != SQL_SUCCESS) {
+            ODBCErrorHelper::raiseException(xsink, "ODBC-CONNECTION-OPTION-ERROR", SQL_HANDLE_DBC, dbc,
+                "could not set connection option '%s' to %u", name, value);
+            return false;
+        }
+        return true;
+    };
+    const QoreHashNode* configured = ds->getConnectOptions();
+    bool login_required = configured && !configured->getKeyValue(OPT_LOGIN_TIMEOUT).isNothing();
+    bool timeout_required = configured && !configured->getKeyValue(OPT_CONN_TIMEOUT).isNothing();
+    if (!set_attribute(SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF, "autocommit", true)
+            || !set_attribute(SQL_ATTR_LOGIN_TIMEOUT, options.loginTimeout, OPT_LOGIN_TIMEOUT, login_required)
+            || !set_attribute(SQL_ATTR_CONNECTION_TIMEOUT, options.connTimeout, OPT_CONN_TIMEOUT, timeout_required)) {
+        return -1;
+    }
     SQLSetConnectAttr(dbc, SQL_ATTR_QUIET_MODE, 0, SQL_IS_POINTER);
-    SQLSetConnectAttr(dbc, SQL_ATTR_LOGIN_TIMEOUT, (SQLPOINTER)(size_t)options.loginTimeout, SQL_IS_UINTEGER);
-    SQLSetConnectAttr(dbc, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)(size_t)options.connTimeout, SQL_IS_UINTEGER);
 
     // Check for interrupt before connection attempt
     if (qore_check_cancel(xsink)) {
@@ -186,7 +206,15 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
     }
 
     // Connect
-    ret = SQLDriverConnectA(dbc, 0, (SQLCHAR*)connStr.c_str(), connStr.length(), 0, 0, 0, SQL_DRIVER_NOPROMPT);
+    {
+        ODBCCancelHelper cancel_helper(dbc, SQL_HANDLE_DBC);
+        ret = SQLDriverConnectA(dbc, 0, (SQLCHAR*)connStr.c_str(), connStr.length(), 0, 0, 0, SQL_DRIVER_NOPROMPT);
+    }
+    // Preserve cancellation even when the native driver cannot cancel connection establishment.
+    connected = SQL_SUCCEEDED(ret);
+    if (qore_check_cancel(xsink, "connecting to the ODBC server")) {
+        return -1;
+    }
     if (!SQL_SUCCEEDED(ret)) { // error
         // NOTE: the connection string is sanitized to ensure that the password is never leaked
         // into the exception message
@@ -195,8 +223,6 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
             "could not connect to the datasource; connection string: '%s'", safeConnStr.c_str());
         return -1;
     }
-    connected = true;
-
     return 0;
 }
 
@@ -709,92 +735,37 @@ int ODBCConnection::setFracPrecisionOption(QoreValue val, ExceptionSink* xsink) 
     return 0;
 }
 
-int ODBCConnection::setLoginTimeoutOption(QoreValue val, ExceptionSink* xsink) {
-    if (val) {
-        if (val.getType() == NT_INT) {
-            int64 i = val.getAsBigInt();
-            if (i < 0) {
-                xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                    OPT_LOGIN_TIMEOUT);
-                return -1;
-            }
-            options.loginTimeout = i;
-        } else if (val.getType() == NT_STRING) {
-            QoreStringValueHelper str(val);
-            TempEncodingHelper tstr(*str, QCS_UTF8, xsink);
-            if (*xsink)
-                return -1;
-            const char* buf = tstr->c_str();
-            for (int i = 0, limit = tstr->size(); i < limit; i++) {
-                if (!isdigit(buf[i]) && buf[i] != ' ') {
-                    xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                        OPT_LOGIN_TIMEOUT);
-                    return -1;
-                }
-            }
-            long int num = strtol(tstr->c_str(), 0, 10);
-            if (num < 0) {
-                xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                    OPT_LOGIN_TIMEOUT);
-                return -1;
-            }
-            options.loginTimeout = num;
-        } else {
-            xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                OPT_LOGIN_TIMEOUT);
-            return -1;
+// Timeout attributes use SQLUINTEGER. Reject malformed strings and overflow before narrowing,
+// and accept zero (ODBC's explicit no-timeout value).
+static int parse_timeout_option(QoreValue val, const char* name, SQLUINTEGER& result, ExceptionSink* xsink) {
+    if (val.getType() == NT_INT) {
+        int64 value = val.getAsBigInt();
+        if (value >= 0 && static_cast<uint64_t>(value) <= std::numeric_limits<SQLUINTEGER>::max()) {
+            result = static_cast<SQLUINTEGER>(value);
+            return 0;
         }
-    } else {
-        xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-            OPT_LOGIN_TIMEOUT);
-        return -1;
+    } else if (val.getType() == NT_STRING) {
+        QoreStringValueHelper value(val);
+        QoreString text(*value);
+        text.trim();
+        SQLUINTEGER parsed;
+        auto rc = std::from_chars(text.c_str(), text.c_str() + text.size(), parsed);
+        if (rc.ec == std::errc() && rc.ptr == text.c_str() + text.size()) {
+            result = parsed;
+            return 0;
+        }
     }
+    xsink->raiseException("ODBC-OPTION-ERROR", "'%s' requires an integer from 0 to %llu seconds", name,
+        static_cast<unsigned long long>(std::numeric_limits<SQLUINTEGER>::max()));
+    return -1;
+}
 
-    return 0;
+int ODBCConnection::setLoginTimeoutOption(QoreValue val, ExceptionSink* xsink) {
+    return parse_timeout_option(val, OPT_LOGIN_TIMEOUT, options.loginTimeout, xsink);
 }
 
 int ODBCConnection::setConnectionTimeoutOption(QoreValue val, ExceptionSink* xsink) {
-    if (val) {
-        if (val.getType() == NT_INT) {
-            int64 i = val.getAsBigInt();
-            if (i < 0) {
-                xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                    OPT_CONN_TIMEOUT);
-                return -1;
-            }
-            options.connTimeout = i;
-        } else if (val.getType() == NT_STRING) {
-            QoreStringValueHelper str(val);
-            TempEncodingHelper tstr(*str, QCS_UTF8, xsink);
-            if (*xsink)
-                return -1;
-            const char* buf = tstr->c_str();
-            for (int i = 0, limit = tstr->size(); i < limit; i++) {
-                if (!isdigit(buf[i]) && buf[i] != ' ') {
-                    xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                        OPT_CONN_TIMEOUT);
-                    return -1;
-                }
-            }
-            long int num = strtol(tstr->c_str(), 0, 10);
-            if (num < 0) {
-                xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                    OPT_CONN_TIMEOUT);
-                return -1;
-            }
-            options.connTimeout = num;
-        } else {
-            xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-                OPT_CONN_TIMEOUT);
-            return -1;
-        }
-    } else {
-        xsink->raiseException("ODBC-OPTION-ERROR", "'%s' option requires an integer argument from 0 up",
-            OPT_CONN_TIMEOUT);
-        return -1;
-    }
-
-    return 0;
+    return parse_timeout_option(val, OPT_CONN_TIMEOUT, options.connTimeout, xsink);
 }
 
 int ODBCConnection::prepareConnectionString(ExceptionSink* xsink) {

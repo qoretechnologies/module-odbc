@@ -1,0 +1,11 @@
+--- a/psqlodbc.h
++++ b/psqlodbc.h
+@@ -633,7 +633,7 @@
+ 	char		database[MEDIUM_REGISTRY_LEN];
+ 	char		username[MEDIUM_REGISTRY_LEN];
+ 	pgNAME		password;
+-	char		port[SMALL_REGISTRY_LEN];
++	char		port[LARGE_REGISTRY_LEN];
+ 	char		sslmode[16];
+ 	char		onlyread[SMALL_REGISTRY_LEN];
+ 	char		fake_oid_index[SMALL_REGISTRY_LEN];

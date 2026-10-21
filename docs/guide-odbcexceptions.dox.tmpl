@@ -4,6 +4,11 @@
 
     @tableofcontents
 
+    \c ODBC-CONNECTION-OPTION-ERROR is raised before connecting if setting transaction mode or an
+    explicitly configured timeout is rejected or coerced by the driver manager. Inspect the native
+    diagnostic records and the configured driver support.
+
+
     The ODBC driver raises various exceptions to indicate error conditions. Understanding these exceptions helps in writing robust error handling code.
 
     @section odbc_connection_errors Connection Errors

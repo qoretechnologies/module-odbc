@@ -45,3 +45,12 @@ any configured database::
 
     export QORE_DB_CONNSTR_ODBC='odbc:database connection string'
     python3 -B -W error test/native/run-driver-faults.py "$QORE_ODBC_BINARY_MODULE"
+
+Connection option failures
+--------------------------
+
+``python3 test/native/run-connection-options.py build-debug/odbc-api-2.0.qmod``
+checks rejected and coerced transaction/timeout attributes before network access,
+including zero and the maximum unsigned 32-bit timeout. ``--valgrind`` runs each
+case under Memcheck. The interposer is private to each subprocess. See
+``patches/README.rst`` for native psqlODBC connection fixes and their failover test.

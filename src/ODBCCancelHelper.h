@@ -39,9 +39,9 @@
 
 namespace odbc {
 
-//! Lets a program interrupt cancel a blocking ODBC call on a statement handle with SQLCancel()
+//! Lets a program interrupt cancel a blocking statement or connection call if supported by the ODBC driver
 /** Create it on the stack around one blocking call (SQLExecDirect(), SQLExecute(), SQLMoreResults(),
-    SQLFetch()); check qore_check_cancel() before and after the call for thread cancellation.
+    SQLFetch(), SQLDriverConnect()); check qore_check_cancel() before and after the call for thread cancellation.
 
     The sandbox manager calls copies of its registered callbacks outside its own lock, so a callback can still
     run after it has been unregistered.  The callback therefore holds only the shared state below: the
@@ -50,9 +50,9 @@ namespace odbc {
  */
 class ODBCCancelHelper {
 public:
-    DLLLOCAL explicit ODBCCancelHelper(SQLHSTMT stmt) {
+    DLLLOCAL explicit ODBCCancelHelper(SQLHANDLE stmt, SQLSMALLINT type = SQL_HANDLE_STMT) {
         if (smh && stmt != SQL_NULL_HSTMT) {
-            std::shared_ptr<State> s = std::make_shared<State>(stmt);
+            std::shared_ptr<State> s = std::make_shared<State>(stmt, type);
             smh->registerCancelCallback(this, [s]() -> bool {
                 return s->cancel();
             });
@@ -74,7 +74,7 @@ private:
     //! The handle that a callback may cancel, shared with the registered callback
     class State {
     public:
-        DLLLOCAL explicit State(SQLHSTMT stmt) : stmt(stmt) {
+        DLLLOCAL explicit State(SQLHANDLE stmt, SQLSMALLINT type) : stmt(stmt), type(type) {
         }
 
         //! Cancels the blocking call; returns true if SQLCancel() succeeded
@@ -83,7 +83,7 @@ private:
             if (stmt == SQL_NULL_HSTMT) {
                 return false;
             }
-            return SQL_SUCCEEDED(SQLCancel(stmt));
+            return SQL_SUCCEEDED(type == SQL_HANDLE_STMT ? SQLCancel(stmt) : SQLCancelHandle(type, stmt));
         }
 
         //! Makes later callbacks do nothing; waits for a running SQLCancel()
@@ -94,7 +94,8 @@ private:
 
     private:
         std::mutex m;
-        SQLHSTMT stmt;
+        SQLHANDLE stmt;
+        const SQLSMALLINT type;
     };
 
     QoreSandboxManagerHelper smh;

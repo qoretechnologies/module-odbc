@@ -4,6 +4,24 @@
 
     @tableofcontents
 
+    @section odbc_connection_setup Connection establishment
+
+    Both timeout options accept integers or decimal integer strings from 0 to 4294967295 seconds;
+    surrounding whitespace is permitted. Zero means unlimited. Negative, fractional, malformed and
+    overflowing values are rejected before connection. Explicitly configured attributes that the driver
+    manager rejects or coerces raise \c ODBC-CONNECTION-OPTION-ERROR; unconfigured defaults remain best effort.
+    @par Example
+    @code{.py}
+    Datasource ds("odbc:app/pass@{login-timeout=5,conn=DRIVER=PostgreSQL Unicode;Server=db.internal;Database=orders}");
+    ds.open();
+    @endcode
+    @note Timeout and cancellation support ultimately depend on the native ODBC driver. Program
+    interruption requests SQLCancelHandle for the connection handle. Drivers such as psqlODBC 16 do
+    not implement that operation; Qore reports pending cancellation after the native call returns.
+    Configure a finite login timeout. A driver manager accepting an attribute before loading a driver
+    does not guarantee that the driver implements it.
+
+
     The odbc driver supports the following DBI options:
     - \c "bigint-native": bind Qore int values as native \c SQL_C_SBIGINT values to ODBC statements; this is the
       default

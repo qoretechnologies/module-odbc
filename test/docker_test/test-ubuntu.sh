@@ -86,6 +86,10 @@ for test in test/*.qtest; do
     RESULTS="$RESULTS $?"
 done
 
+# Exercise native connection-option failures without a database.
+python3 test/native/run-connection-options.py build/odbc-api-2.0.qmod
+RESULTS="$RESULTS $?"
+
 # Cleanup if using shared host
 if ! getent hosts postgres > /dev/null 2>&1; then
     . test/docker_test/postgres_lib.sh
