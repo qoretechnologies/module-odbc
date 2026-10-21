@@ -6,8 +6,32 @@
 %requires odbc
 %exec-class ArrayBindingTest
 
+#! Tests array binding with NULL values; the test uses PostgreSQL DDL, types and results (psqlODBC), so it is
+#! skipped without a PostgreSQL connection in QORE_DB_CONNSTR_ODBC
 class ArrayBindingTest inherits QUnit::Test {
+    private {
+        # why every test case is skipped, if it is
+        *string skipReason;
+    }
+
     constructor() : QUnit::Test("ODBC nullable array binding", "1.0", \ARGV) {
+        *string connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            skipReason = "QORE_DB_CONNSTR_ODBC is not set";
+        } else {
+            try {
+                Datasource ds(connstr);
+                ds.open();
+                on_exit ds.close();
+                string server = ds.getDriverRealName();
+                if (server != "PostgreSQL") {
+                    skipReason = sprintf("the test needs a PostgreSQL connection; the server of QORE_DB_CONNSTR_ODBC "
+                        "is %y", server);
+                }
+            } catch () {
+                # a connection that cannot be made is not a reason to skip: each test case raises the error
+            }
+        }
         addTestCase("all NULL", sub() { check("VARCHAR(20)", (NULL, NULL, NULL), (NULL, NULL, NULL)); });
         addTestCase("all NOTHING", sub() { check("VARCHAR(20)", (NOTHING, NOTHING, NOTHING), (NULL, NULL, NULL)); });
         addTestCase("mixed NULL and NOTHING", sub() { check("INTEGER", (NULL, NOTHING, NULL), (NULL, NULL, NULL)); });
@@ -43,6 +67,12 @@ class ArrayBindingTest inherits QUnit::Test {
             check("BYTEA", values, values);
         });
         set_return_value(main());
+    }
+
+    setUp() {
+        if (skipReason) {
+            testSkip(skipReason);
+        }
     }
 
     private check(string sqlType, auto values, list<auto> expected, bool stringInts = False) {
