@@ -209,7 +209,7 @@ void ODBCConnection::releaseStatementHandleLater(SQLHSTMT stmt) noexcept {
     }
 }
 
-int ODBCConnection::disconnect() {
+int ODBCConnection::disconnect(ExceptionSink* xsink) {
     if (!connected) {
         return 0;
     }
@@ -248,6 +248,8 @@ int ODBCConnection::disconnect() {
     }
 
     // the driver cannot disconnect: the connection handle stays allocated, as a connected handle cannot be freed
+    handleDbcError("ODBC-DISCONNECT-ERROR", "the driver could not disconnect the connection, which is closed "
+        "without being disconnected", xsink);
     return -1;
 }
 

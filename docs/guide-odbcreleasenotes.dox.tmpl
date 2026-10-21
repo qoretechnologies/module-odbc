@@ -56,7 +56,11 @@
       \c HY104 by the Microsoft driver and silently truncated to 8000 bytes by FreeTDS
     - Closing a connection no longer hangs when the driver refuses to disconnect: a statement still waiting for
       data is cancelled and freed, an active transaction is rolled back, and the connection is disconnected once;
-      the driver was called again every 50 milliseconds without end
+      the driver was called again every 50 milliseconds without end.  When built with %Qore 3.0 or later, a
+      connection that the driver still cannot disconnect raises \c ODBC-DISCONNECT-ERROR where it is closed, for
+      example by @ref Qore::SQL::Datasource::close() "Datasource::close()" or the destruction of the datasource
+      (@ref Qore::odbc::ODBC_HAVE_DISCONNECT_ERROR "ODBC_HAVE_DISCONNECT_ERROR" is \c True then); it was not reported
+      at all
     - An execution that the driver answers with \c SQL_NEED_DATA (the driver asking for parameter data at execution,
       which this driver never binds) is cancelled and raises \c ODBC-EXEC-ERROR saying so; the statement was left
       half-executed, which made it unusable and kept the connection from being used or closed

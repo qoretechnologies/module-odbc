@@ -77,12 +77,12 @@ public:
         is closed.  If the driver still refuses, the connection handle is kept allocated (ODBC does not allow
         freeing a connected handle) and the connection is treated as closed.
 
-        No exception can be raised: the DBI close callback has no exception sink, and after a lost connection the
-        driver reconnects transparently.
+        @param xsink if given, \c ODBC-DISCONNECT-ERROR is raised here if the driver refuses; none is given when
+        the connection is disconnected to reconnect after it was lost, as nothing can be reported then
 
         @return 0 if disconnected, -1 if the driver refused
      */
-    DLLLOCAL int disconnect();
+    DLLLOCAL int disconnect(ExceptionSink* xsink = nullptr);
 
     //! Takes a statement handle that the driver refused to free; it is cancelled and freed before disconnecting
     DLLLOCAL void releaseStatementHandleLater(SQLHSTMT stmt) noexcept;

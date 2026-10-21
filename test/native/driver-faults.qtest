@@ -16,7 +16,10 @@ class DriverFaultsTest inherits QUnit::Test {
             addTestCase("a SQLStatement waiting for data can be executed again", \needDataStatement());
         }
         if (ENV.ODBC_FAULT_DISCONNECT == "1") {
-            addTestCase("a connection that the driver cannot disconnect closes without retrying", \disconnectRefused());
+            addTestCase("a connection that the driver cannot disconnect closes without retrying",
+                \disconnectRefused());
+            addTestCase("an open datasource that the driver cannot disconnect reports it when destroyed",
+                \disconnectRefusedDestroyed());
         }
         set_return_value(main());
     }
@@ -92,8 +95,30 @@ class DriverFaultsTest inherits QUnit::Test {
             ds.open();
             assertEq({"a": (1,)}, ds.select("select 1 as a"), sprintf("connection %d", i));
             ds.rollback();
-            # SQLDisconnect() fails: the close returns after one attempt
+            # SQLDisconnect() fails: the close returns after one attempt, and reports it when the DBI layer of the
+            # Qore version that the module was built with can report an error closing a connection
+            if (ODBC_HAVE_DISCONNECT_ERROR) {
+                assertThrows("ODBC-DISCONNECT-ERROR", "could not disconnect", \ds.close(), NOTHING,
+                    sprintf("connection %d", i));
+            } else {
+                # the error cannot be reported: the close returns without one (run-driver-faults.py checks that
+                # SQLDisconnect() was called once)
+                ds.close();
+            }
+            # the datasource is closed nevertheless: closing it again does not disconnect again
             ds.close();
         }
+    }
+
+    private disconnectRefusedDestroyed() {
+        if (!ODBC_HAVE_DISCONNECT_ERROR) {
+            testSkip("the module was built with a Qore version whose DBI layer cannot report an error closing a "
+                "connection (ODBC_HAVE_DISCONNECT_ERROR is False)");
+        }
+        Datasource destroyed(ENV.QORE_DB_CONNSTR_ODBC);
+        destroyed.open();
+        assertEq({"a": (1,)}, destroyed.select("select 1 as a"), "destroyed connection");
+        destroyed.rollback();
+        assertThrows("ODBC-DISCONNECT-ERROR", "could not disconnect", sub () { delete destroyed; });
     }
 }

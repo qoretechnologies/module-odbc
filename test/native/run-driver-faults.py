@@ -9,12 +9,24 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-# fault variable, expected trace counts (a disconnect is attempted exactly once per closed connection)
-SCENARIOS = (
-    ("ODBC_FAULT_NEED_DATA", {"ODBC_FAULT_TRACE data at execution for column 1": 3,
-                              "ODBC_FAULT_TRACE SQLDisconnect": 4}),
-    ("ODBC_FAULT_DISCONNECT", {"ODBC_FAULT_TRACE SQLDisconnect refused": 2}),
-)
+
+def scenarios(disconnect_error):
+    """Return the fault variables and the expected trace counts (a disconnect is attempted exactly once per closed
+    connection); the test destroys one more connection that cannot be disconnected when the module reports the
+    error (ODBC_HAVE_DISCONNECT_ERROR), and skips that case otherwise."""
+    return (
+        ("ODBC_FAULT_NEED_DATA", {"ODBC_FAULT_TRACE data at execution for column 1": 3,
+                                  "ODBC_FAULT_TRACE SQLDisconnect": 4}),
+        ("ODBC_FAULT_DISCONNECT", {"ODBC_FAULT_TRACE SQLDisconnect refused": 3 if disconnect_error else 2}),
+    )
+
+
+def has_disconnect_error(module):
+    """Return whether the module raises ODBC-DISCONNECT-ERROR, which depends on the Qore version it was built with."""
+    result = subprocess.run(["qore", "-b", "-l", str(module), "-ne",
+                             "printf(\"%d\", ODBC_HAVE_DISCONNECT_ERROR ? 1 : 0);"],
+                            capture_output=True, text=True, timeout=60, check=True)
+    return result.stdout.strip() == "1"
 
 
 def main():
@@ -30,7 +42,7 @@ def main():
         subprocess.run(["c++", "-std=c++11", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
                         "-shared", "-fPIC", str(root / "driver-faults.cpp"), "-ldl",
                         "-o", str(library)], check=True)
-        for fault, expected in SCENARIOS:
+        for fault, expected in scenarios(has_disconnect_error(module)):
             env = dict(os.environ, LD_PRELOAD=str(library))
             env[fault] = "1"
             try:

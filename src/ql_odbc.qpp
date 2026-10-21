@@ -6,7 +6,7 @@
 
     ODBC Interface to Qore DBI layer
 
-    Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+    Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -33,6 +33,28 @@
 #include <qore/Qore.h>
 
 #include "ODBCConnection.h"
+
+// whether the Qore DBI layer can report an error closing a connection
+#ifdef QDBI_METHOD_CLOSE_SINK
+#define ODBC_HAVE_DISCONNECT_ERROR_VALUE true
+#else
+#define ODBC_HAVE_DISCONNECT_ERROR_VALUE false
+#endif
+
+/** @defgroup odbc_feature_constants Feature Constants for the odbc Module
+ */
+///@{
+namespace Qore::odbc;
+//! This constant indicates if the odbc driver raises \c ODBC-DISCONNECT-ERROR for a connection it cannot disconnect
+/** The error is raised where the connection is closed, for example by Qore::SQL::Datasource::close() or the
+    destruction of the datasource.  It is only supported if the module was built with a %Qore version whose DBI layer
+    can report an error closing a connection (%Qore 3.0 or later); otherwise such a connection is closed without
+    reporting it.
+
+    @since odbc 2.0
+ */
+const ODBC_HAVE_DISCONNECT_ERROR = bool(ODBC_HAVE_DISCONNECT_ERROR_VALUE);
+///@}
 
 /** @defgroup odbc_bind_constants Type Constants for odbc_bind()
  */

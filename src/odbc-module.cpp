@@ -4,7 +4,7 @@
 
     Qore ODBC module
 
-    Copyright (C) 2016 - 2022 Qore Technologies s.r.o.
+    Copyright (C) 2016 - 2026 Qore Technologies s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -99,11 +99,23 @@ static int odbc_open(Datasource* ds, ExceptionSink* xsink) {
     return 0;
 }
 
+//! closes the connection with Qore versions whose DBI close method cannot report an error
 static int odbc_close(Datasource* ds) {
     std::unique_ptr<odbc::ODBCConnection> conn(static_cast<odbc::ODBCConnection*>(ds->getPrivateData()));
     ds->setPrivateData(nullptr);
     return 0;
 }
+
+#ifdef QDBI_METHOD_CLOSE_SINK
+//! closes the connection, raising ODBC-DISCONNECT-ERROR if the driver cannot disconnect it
+/** the connection is released in every case
+*/
+static int odbc_close_sink(Datasource* ds, ExceptionSink* xsink) {
+    std::unique_ptr<odbc::ODBCConnection> conn(static_cast<odbc::ODBCConnection*>(ds->getPrivateData()));
+    ds->setPrivateData(nullptr);
+    return conn ? conn->disconnect(xsink) : 0;
+}
+#endif
 
 static QoreValue odbc_select(Datasource* ds, const QoreString* qstr, const QoreListNode* args, ExceptionSink* xsink) {
     odbc::ODBCConnection* conn = static_cast<odbc::ODBCConnection*>(ds->getPrivateData());
@@ -402,7 +414,11 @@ static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
 
     qore_dbi_method_list methods;
     methods.add(QDBI_METHOD_OPEN, odbc_open);
+    // the close method that cannot report an error stays registered for earlier Qore versions
     methods.add(QDBI_METHOD_CLOSE, odbc_close);
+#ifdef QDBI_METHOD_CLOSE_SINK
+    methods.add(QDBI_METHOD_CLOSE_SINK, odbc_close_sink);
+#endif
     methods.add(QDBI_METHOD_SELECT, odbc_select);
 #ifdef QDBI_METHOD_SELECT_TYPED
     methods.add(QDBI_METHOD_SELECT_TYPED, odbc_select_typed);

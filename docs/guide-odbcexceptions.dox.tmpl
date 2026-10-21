@@ -12,6 +12,7 @@
     |\c ODBC-CONNECTION-ERROR|Connection to the database failed|Invalid credentials, server unavailable, network issues, incorrect connection string|Verify connection string, credentials, network connectivity, and that the database server is running
     |\c ODBC-CONNECTION-HANDLE-ERROR|Cannot allocate a connection handle|Resource exhaustion, ODBC driver issues|Check ODBC driver configuration, restart application
     |\c ODBC-CONNECTION-DEAD-ERROR|The database connection has been lost|Network failure, server restart, idle timeout|Reconnect to the database; consider using connection pooling with health checks
+    |\c ODBC-DISCONNECT-ERROR|The driver could not disconnect a connection being closed; the connection is closed nevertheless (when built with %Qore 3.0 or later: see @ref Qore::odbc::ODBC_HAVE_DISCONNECT_ERROR "ODBC_HAVE_DISCONNECT_ERROR")|A statement or transaction the driver cannot end, a driver or network failure|Check the driver's diagnostics in the description; the datasource can be opened again
     |\c ODBC-ENV-HANDLE-ERROR|Cannot allocate an environment handle|ODBC driver not installed or misconfigured|Install/reinstall the ODBC driver, check odbcinst.ini configuration
     |\c ODBC-NO-CONNECTION-ERROR|Operation attempted without an open connection|Calling database methods before connecting or after disconnection|Ensure connection is established before executing operations
 
