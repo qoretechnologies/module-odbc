@@ -1,0 +1,101 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that statements of a connection that the server ended are released without using freed driver memory.
+#
+# The server session of a connection is ended from another session (pg_terminate_backend()), and the connection is
+# then used: psqlODBC releases a statement of the lost connection even though SQLFreeHandle() reports an error, so
+# a statement handle must not be used again after that.  A use of the freed memory crashes the process (or shows
+# under valgrind), which ends the test with an error.
+# Runs against PostgreSQL (psqlODBC) given in QORE_DB_CONNSTR_ODBC, with a user that may end other sessions.
+
+%modern
+%no-child-restrictions
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class OdbcLostConnectionTest
+
+class OdbcLostConnectionTest inherits QUnit::Test {
+    private {
+        *string connstr;
+        #! why the test cannot run
+        *string skip_reason;
+    }
+
+    constructor() : QUnit::Test("ODBC lost connection", "1.0", \ARGV) {
+        addTestCase("a query on a connection that the server ended", \query());
+        addTestCase("a prepared statement of a connection that the server ended", \statement());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            skip_reason = "QORE_DB_CONNSTR_ODBC is not set";
+            return;
+        }
+        Datasource ds(connstr);
+        ds.open();
+        if (ds.getDriverRealName() != "PostgreSQL") {
+            skip_reason = "QORE_DB_CONNSTR_ODBC does not give a PostgreSQL connection";
+        }
+    }
+
+    #! skips the test case if the test cannot run
+    private checkEnv() {
+        if (skip_reason) {
+            testSkip(skip_reason);
+        }
+    }
+
+    #! returns a connection in autocommit mode, so that no transaction is left open by the failures below
+    private Datasource getConnection() {
+        Datasource ds(connstr);
+        ds.setAutoCommit(True);
+        return ds;
+    }
+
+    #! ends the server session of the given connection from another session
+    private endSession(Datasource ds) {
+        int pid = ds.select("select pg_backend_pid() as pid").pid[0];
+        Datasource killer = getConnection();
+        assertEq(1, killer.select(sprintf("select pg_terminate_backend(%d)::int as ok", pid)).ok[0],
+            "the session was ended");
+    }
+
+    query() {
+        checkEnv();
+        Datasource ds = getConnection();
+        endSession(ds);
+        # the query fails, and the statement that it used is released
+        assertThrows("ODBC-EXEC-ERROR", \ds.select(), "select 1 as x");
+        # the connection is closed when the datasource is destroyed
+        delete ds;
+    }
+
+    statement() {
+        checkEnv();
+        Datasource ds = getConnection();
+        SQLStatement stmt(ds);
+        stmt.prepare("select 1 as x");
+        stmt.exec();
+        assertEq(({"x": 1},), stmt.fetchRows());
+        stmt.close();
+        stmt.prepare("select 1 as x");
+        endSession(ds);
+        # the execution fails on the lost connection, and the statement is released when it is closed
+        assertThrows("ODBC-EXEC-ERROR", \stmt.exec());
+        stmt.close();
+        # the statement's transaction lock is released with the rollback, which the dead connection refuses
+        assertThrows("ODBC-CONNECTION-DEAD-ERROR", \ds.rollback());
+        delete stmt;
+        delete ds;
+    }
+}

@@ -922,6 +922,20 @@ void ODBCConnection::checkIfConnectionDead(ExceptionSink* xsink) {
     }
 }
 
+bool ODBCConnection::isAlive() noexcept {
+    if (isDead) {
+        return false;
+    }
+    SQLULEN deadAttr = SQL_CD_TRUE;
+    SQLRETURN ret = SQLGetConnectAttr(dbc, SQL_ATTR_CONNECTION_DEAD, reinterpret_cast<SQLPOINTER>(&deadAttr),
+        sizeof(deadAttr), 0);
+    if (!SQL_SUCCEEDED(ret) || deadAttr == SQL_CD_TRUE) {
+        isDead = true;
+        return false;
+    }
+    return true;
+}
+
 void ODBCConnection::handleDbcError(const char* err, const char* desc, ExceptionSink* xsink) {
     if (!xsink) {
         return;

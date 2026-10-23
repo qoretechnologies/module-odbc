@@ -87,6 +87,13 @@ public:
     //! Takes a statement handle that the driver refused to free; it is cancelled and freed before disconnecting
     DLLLOCAL void releaseStatementHandleLater(SQLHSTMT stmt) noexcept;
 
+    //! Returns true if the driver reports that the connection is alive
+    /** A connection that the driver cannot report on (\c SQL_ATTR_CONNECTION_DEAD fails) is taken as dead, as is one
+        that was found dead before: the handles of a dead connection's statements may already have been released by
+        the driver
+    */
+    DLLLOCAL bool isAlive() noexcept;
+
     //! Commit an ODBC transaction.
     /** @param xsink exception sink
 

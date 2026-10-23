@@ -780,10 +780,12 @@ QoreHashNode* ODBCStatement::describe(ExceptionSink* xsink) {
 void ODBCStatement::freeStatementHandle() {
     if (stmt != SQL_NULL_HSTMT) {
         SQLCloseCursor(stmt);
-        if (!SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_STMT, stmt))) {
-            // the driver refuses to free a statement that is still executing or waiting for data (HY010); it is
-            // cancelled first, and if it still cannot be freed, the connection frees it before disconnecting, as
-            // the statement would otherwise keep the connection from being disconnected
+        // the driver refuses to free a statement that is still executing or waiting for data (HY010); it is
+        // cancelled first, and if it still cannot be freed, the connection frees it before disconnecting, as the
+        // statement would otherwise keep the connection from being disconnected.  A driver can also fail to free a
+        // statement of a lost connection after it has already released it (psqlodbc does), so the handle is used
+        // again only while the connection is alive; otherwise it is dropped without being touched
+        if (!SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_STMT, stmt)) && conn->isAlive()) {
             SQLCancel(stmt);
             if (!SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_STMT, stmt))) {
                 conn->releaseStatementHandleLater(stmt);
