@@ -280,6 +280,10 @@ int ODBCConnection::disconnect(ExceptionSink* xsink) {
 }
 
 int ODBCConnection::commit(ExceptionSink* xsink) {
+    // the driver can report success for a connection that it knows is lost (psqlODBC does, after the server ended the
+    // session), which would hide the loss of the transaction, so the connection's state is checked first; a driver
+    // that cannot report it leaves the result to SQLEndTran()
+    checkIfConnectionDead(nullptr);
     if (isDead) {
         deadConnectionError(xsink);
         return -1;
@@ -295,6 +299,10 @@ int ODBCConnection::commit(ExceptionSink* xsink) {
 }
 
 int ODBCConnection::rollback(ExceptionSink* xsink) {
+    // the driver can report success for a connection that it knows is lost (psqlODBC does, after the server ended the
+    // session), which would hide the loss of the transaction, so the connection's state is checked first; a driver
+    // that cannot report it leaves the result to SQLEndTran()
+    checkIfConnectionDead(nullptr);
     if (isDead) {
         deadConnectionError(xsink);
         return -1;

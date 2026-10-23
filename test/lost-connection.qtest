@@ -3,12 +3,12 @@
 # Copyright (C) 2026 Qore Technologies, s.r.o.
 # SPDX-License-Identifier: MIT
 
-# Tests that statements of a connection that the server ended are released without using freed driver memory.
-#
-# The server session of a connection is ended from another session (pg_terminate_backend()), and the connection is
-# then used: psqlODBC releases a statement of the lost connection even though SQLFreeHandle() reports an error, so
-# a statement handle must not be used again after that.  A use of the freed memory crashes the process (or shows
-# under valgrind), which ends the test with an error.
+# Tests a connection whose server session was ended from another session (pg_terminate_backend()):
+# - its statements are released without using freed driver memory: psqlODBC 17 releases a statement of the lost
+#   connection even though SQLFreeHandle() reports an error, so a statement handle must not be used again after that
+#   (a use of the freed memory crashes the process, or shows under valgrind, which ends the test with an error)
+# - its transaction cannot be ended: psqlODBC reports success for a commit or rollback on a connection that it knows
+#   is lost (psqlODBC 16 and 17), and the commit of a lost transaction must not look successful
 # Runs against PostgreSQL (psqlODBC) given in QORE_DB_CONNSTR_ODBC, with a user that may end other sessions.
 
 %modern
@@ -32,6 +32,7 @@ class OdbcLostConnectionTest inherits QUnit::Test {
     constructor() : QUnit::Test("ODBC lost connection", "1.0", \ARGV) {
         addTestCase("a query on a connection that the server ended", \query());
         addTestCase("a prepared statement of a connection that the server ended", \statement());
+        addTestCase("a commit on a connection that the server ended", \commit());
         set_return_value(main());
     }
 
@@ -93,9 +94,22 @@ class OdbcLostConnectionTest inherits QUnit::Test {
         # the execution fails on the lost connection, and the statement is released when it is closed
         assertThrows("ODBC-EXEC-ERROR", \stmt.exec());
         stmt.close();
-        # the statement's transaction lock is released with the rollback, which the dead connection refuses
+        # the statement's transaction lock is released with the rollback, which the lost connection cannot do
         assertThrows("ODBC-CONNECTION-DEAD-ERROR", \ds.rollback());
         delete stmt;
+        delete ds;
+    }
+
+    commit() {
+        checkEnv();
+        Datasource ds(connstr);
+        ds.beginTransaction();
+        endSession(ds);
+        # the statement fails on the lost connection, which loses the transaction
+        assertThrows("ODBC-EXEC-ERROR", \ds.exec(), "select 1 as x");
+        # the commit is refused, although the driver would report success for it
+        assertThrows("ODBC-CONNECTION-DEAD-ERROR", \ds.commit());
+        assertFalse(ds.currentThreadInTransaction(), "the transaction lock was released");
         delete ds;
     }
 }

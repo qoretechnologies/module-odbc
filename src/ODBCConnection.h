@@ -95,14 +95,20 @@ public:
     DLLLOCAL bool isAlive() noexcept;
 
     //! Commit an ODBC transaction.
-    /** @param xsink exception sink
+    /** Raises \c ODBC-CONNECTION-DEAD-ERROR without calling the driver if the driver reports the connection as dead
+        (\c SQL_ATTR_CONNECTION_DEAD)
+
+        @param xsink exception sink
 
         @return 0 for OK, -1 for error
      */
     DLLLOCAL int commit(ExceptionSink* xsink);
 
     //! Rollback an ODBC transaction.
-    /** @param xsink exception sink
+    /** Raises \c ODBC-CONNECTION-DEAD-ERROR without calling the driver if the driver reports the connection as dead
+        (\c SQL_ATTR_CONNECTION_DEAD)
+
+        @param xsink exception sink
 
         @return 0 for OK, -1 for error
      */
@@ -349,7 +355,8 @@ private:
 
     //! Check if connection is dead.
     /** Checks if the ODBC connection is dead and optionally modifies isDead variable.
-        @param xsink exception sink
+        @param xsink exception sink for an error querying the connection's state; if nullptr, the error is ignored and
+        isDead is left as it is
      */
     DLLLOCAL void checkIfConnectionDead(ExceptionSink* xsink);
 
