@@ -1898,8 +1898,12 @@ int ODBCStatement::bindIntern(const QoreListNode* args, ExceptionSink* xsink) {
                 if (*xsink) {
                     return -1;
                 }
+                // an empty value is a zero-length value, not NULL: its data pointer is not used, but it is never
+                // null, as the driver takes a null data pointer as a missing value whatever the length is
+                static char empty_binary = 0;
+                void* data = len ? const_cast<void*>(b->getPtr()) : &empty_binary;
                 ret = SQLBindParameter(stmt, i + 1, SQL_PARAM_INPUT, SQL_C_BINARY,
-                    sqlType, len, 0, const_cast<void*>(b->getPtr()), len, indPtr);
+                    sqlType, len, 0, data, len, indPtr);
                 break;
             }
             case NT_HASH: {
@@ -4075,7 +4079,9 @@ int ODBCStatement::createArrayFromBinaryList(const QoreListNode* arg, void*& arr
             return -1;
         }
         QoreValue bin = arg->retrieveEntry(i);
-        if (bin.isNullOrNothing() || !bin.get<const BinaryNode>()->getPtr()) {
+        // only NULL and NOTHING bind as NULL: an empty binary value is a zero-length value, as when it is bound
+        // alone (whether a value has a buffer is not its emptiness)
+        if (bin.isNullOrNothing()) {
             indArray[i] = SQL_NULL_DATA;
             continue;
         }

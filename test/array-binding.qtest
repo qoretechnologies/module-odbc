@@ -43,9 +43,10 @@ class ArrayBindingTest inherits QUnit::Test {
         addTestCase("string NULL indicators", sub() { check("VARCHAR(20)", (NULL, "", "hello", NOTHING), (NULL, "", "hello", NULL)); });
         addTestCase("zero-width strings", sub() { check("VARCHAR(20)", ("", NULL, ""), ("", NULL, "")); });
         addTestCase("binary NULL indicators", sub() { check("BYTEA", (NULL, <bead>, NOTHING, <001122>), (NULL, <bead>, NULL, <001122>)); });
-        addTestCase("empty binary array", sub() { check("BYTEA", (binary(), NULL, binary()), (NULL, NULL, NULL)); });
-        addTestCase("mixed empty binary array", sub() { check("BYTEA", (binary(), <bead>, NULL), (NULL, <bead>, NULL)); });
+        addTestCase("empty binary array", sub() { check("BYTEA", (binary(), NULL, binary()), (binary(), NULL, binary())); });
+        addTestCase("mixed empty binary array", sub() { check("BYTEA", (binary(), <bead>, NULL), (binary(), <bead>, NULL)); });
         addTestCase("empty binary broadcast", sub() { check("BYTEA", binary(), (binary(), binary(), binary())); });
+        addTestCase("single binary values", \singleBinary());
         addTestCase("empty string broadcast", sub() { check("VARCHAR(20)", "", ("", "", "")); });
         addTestCase("date NULL indicators", sub() { check("TIMESTAMP", (NULL, 2026-01-02T03:04:05Z, NOTHING), (NULL, 2026-01-02T03:04:05Z, NULL)); });
         addTestCase("single NULL element", sub() { check("VARCHAR(20)", (NULL,), (NULL,)); });
@@ -73,6 +74,24 @@ class ArrayBindingTest inherits QUnit::Test {
         if (skipReason) {
             testSkip(skipReason);
         }
+    }
+
+    #! A binary value bound alone binds as an array element does: an empty value as a zero-length value, NULL as NULL
+    private singleBinary() {
+        Datasource ds(ENV.QORE_DB_CONNSTR_ODBC);
+        ds.open();
+        on_exit ds.close();
+        on_error ds.rollback();
+        ds.exec("CREATE TEMP TABLE single_binary (id INTEGER, value BYTEA)");
+        list<auto> values = (binary(), NULL, <bead>);
+        foreach auto value in (values) {
+            ds.exec("INSERT INTO single_binary VALUES (%v, %v)", $# + 1, value);
+        }
+        ds.commit();
+        hash<auto> result = ds.select("SELECT id, value FROM single_binary ORDER BY id");
+        assertEq((1, 2, 3), result.id);
+        assertEq((binary(), NULL, <bead>), result.value);
+        ds.commit();
     }
 
     private check(string sqlType, auto values, list<auto> expected, bool stringInts = False) {
