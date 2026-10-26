@@ -1676,9 +1676,8 @@ int ODBCStatement::parse(QoreString* str, const QoreListNode* args, ExceptionSin
                 str->replace(offset, 2, "?");
                 p = str->c_str() + offset + 1;
                 paramCountInSql++;
-                if (v) {
-                    params->push(v.refSelf(), xsink);
-                }
+                // every placeholder is bound: a NULL, NOTHING or missing argument is bound as NULL
+                params->push(v.refSelf(), xsink);
                 continue;
             }
 

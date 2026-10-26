@@ -1,0 +1,252 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that a %v placeholder whose argument is NULL, NOTHING or missing is bound as NULL: every placeholder in the
+# command is bound, so the driver gets as many parameters as the command has markers (psqlODBC otherwise fails with
+# "[07002] The # of IPD parameters 1 < 2 the # of parameter markers").
+#
+# The arguments are given from a function, a method, a static method and from top-level code, as a literal NULL, a
+# literal NOTHING, NULL in a variable, and by leaving out the last argument; run in each execution mode, since the
+# AST interpreter and the IR and JIT engines pass a literal NULL to the builtin differently.
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+#! the outcome of each insert, by key: "ok" or the exception
+public hashdecl InsertOutcomes {
+    hash<string, string> outcomes = {};
+}
+
+#! the inserts from the top-level code below, if there is a connection
+hash<InsertOutcomes> TopLevelOutcomes();
+
+*Datasource tds = NullArgsTest::openDatasource();
+*string ttable;
+if (tds) {
+    ttable = NullArgsTest::createTable(tds);
+    string sql = "insert into " + ttable + " (a, k) values (%v, %v)";
+    auto n = NULL;
+    try {
+        tds.exec(sql, NULL, 41);
+        TopLevelOutcomes.outcomes."41" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        TopLevelOutcomes.outcomes."41" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+    try {
+        tds.exec(sql, NOTHING, 42);
+        TopLevelOutcomes.outcomes."42" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        TopLevelOutcomes.outcomes."42" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+    try {
+        tds.exec(sql, n, 43);
+        TopLevelOutcomes.outcomes."43" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        TopLevelOutcomes.outcomes."43" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+    try {
+        tds.exec("insert into " + ttable + " (k, a) values (%v, %v)", 44);
+        TopLevelOutcomes.outcomes."44" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        TopLevelOutcomes.outcomes."44" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+}
+
+# the inserts above must run in top-level code, so this test does not use %exec-class; the return value of
+# top-level code is the exit status, and exit() is not used, as it skips the cleanup of the library
+NullArgsTest test(tds, ttable, TopLevelOutcomes);
+return test.main();
+
+#! inserts from a function: keys 11 - 14
+hash<InsertOutcomes> sub insert_from_function(Datasource ds, string table) {
+    hash<InsertOutcomes> rv();
+    string sql = "insert into " + table + " (a, k) values (%v, %v)";
+    auto n = NULL;
+    try {
+        ds.exec(sql, NULL, 11);
+        rv.outcomes."11" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        rv.outcomes."11" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+    try {
+        ds.exec(sql, NOTHING, 12);
+        rv.outcomes."12" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        rv.outcomes."12" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+    try {
+        ds.exec(sql, n, 13);
+        rv.outcomes."13" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        rv.outcomes."13" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+    try {
+        ds.exec("insert into " + table + " (k, a) values (%v, %v)", 14);
+        rv.outcomes."14" = "ok";
+    } catch (hash<ExceptionInfo> ex) {
+        rv.outcomes."14" = sprintf("%s: %s", ex.err, ex.desc);
+    }
+    return rv;
+}
+
+class NullArgsTest inherits QUnit::Test {
+    private {
+        *Datasource ds;
+        *string table;
+        hash<InsertOutcomes> top_level;
+    }
+
+    constructor(*Datasource ds, *string table, hash<InsertOutcomes> top_level)
+            : QUnit::Test("ODBC NULL, NOTHING and missing arguments", "1.0", \ARGV) {
+        self.ds = ds;
+        self.table = table;
+        self.top_level = top_level;
+        addTestCase("arguments from a function", \fromFunction());
+        addTestCase("arguments from a method", \fromMethod());
+        addTestCase("arguments from a static method", \fromStaticMethod());
+        addTestCase("arguments from top-level code", \fromTopLevel());
+    }
+
+    #! returns an open connection to PostgreSQL or SQL Server from QORE_DB_CONNSTR_ODBC, if given
+    static *Datasource openDatasource() {
+        *string connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (!connstr) {
+            return;
+        }
+        Datasource ds(connstr);
+        ds.open();
+        string driver = ds.getDriverRealName();
+        if (driver != "PostgreSQL" && driver !~ /SQL Server/i) {
+            ds.close();
+            return;
+        }
+        return ds;
+    }
+
+    #! creates the table for the inserts and returns its name
+    static string createTable(Datasource ds) {
+        string table = sprintf("odbc_null_args_%d_%d", getpid(), now_us() % 1000000000);
+        ds.exec("create table " + table + " (k int, a int)");
+        ds.commit();
+        return table;
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.exec("drop table " + table);
+            ds.commit();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
+        }
+    }
+
+    #! inserts from a method: keys 21 - 24
+    private hash<InsertOutcomes> insertFromMethod() {
+        hash<InsertOutcomes> rv();
+        string sql = "insert into " + table + " (a, k) values (%v, %v)";
+        auto n = NULL;
+        try {
+            ds.exec(sql, NULL, 21);
+            rv.outcomes."21" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."21" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        try {
+            ds.exec(sql, NOTHING, 22);
+            rv.outcomes."22" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."22" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        try {
+            ds.exec(sql, n, 23);
+            rv.outcomes."23" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."23" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        try {
+            ds.exec("insert into " + table + " (k, a) values (%v, %v)", 24);
+            rv.outcomes."24" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."24" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        return rv;
+    }
+
+    #! inserts from a static method: keys 31 - 34
+    private static hash<InsertOutcomes> insertFromStaticMethod(Datasource ds, string table) {
+        hash<InsertOutcomes> rv();
+        string sql = "insert into " + table + " (a, k) values (%v, %v)";
+        auto n = NULL;
+        try {
+            ds.exec(sql, NULL, 31);
+            rv.outcomes."31" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."31" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        try {
+            ds.exec(sql, NOTHING, 32);
+            rv.outcomes."32" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."32" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        try {
+            ds.exec(sql, n, 33);
+            rv.outcomes."33" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."33" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        try {
+            ds.exec("insert into " + table + " (k, a) values (%v, %v)", 34);
+            rv.outcomes."34" = "ok";
+        } catch (hash<ExceptionInfo> ex) {
+            rv.outcomes."34" = sprintf("%s: %s", ex.err, ex.desc);
+        }
+        return rv;
+    }
+
+    #! checks that each insert succeeded and stored NULL in column a, with the key it was given
+    private check(int base, hash<InsertOutcomes> r) {
+        list<int> ks = (base + 1, base + 2, base + 3, base + 4);
+        hash<string, string> ok = map {$1.toString(): "ok"}, ks;
+        assertEq(ok, r.outcomes, "every insert succeeded");
+        # top-level inserts are committed by the first check that reads them
+        ds.commit();
+        list<hash<auto>> rows = ds.selectRows("select k, a from " + table + " where k between %v and %v order by k",
+            ks[0], ks[3]);
+        list<hash<auto>> expected = ();
+        foreach int k in (ks) {
+            expected += {"k": k, "a": NULL};
+        }
+        assertEq(expected, rows, "NULL bound for each NULL, NOTHING or missing argument");
+    }
+
+    fromFunction() {
+        check(10, insert_from_function(ds, table));
+    }
+
+    fromMethod() {
+        check(20, insertFromMethod());
+    }
+
+    fromStaticMethod() {
+        check(30, NullArgsTest::insertFromStaticMethod(ds, table));
+    }
+
+    fromTopLevel() {
+        check(40, top_level);
+    }
+}

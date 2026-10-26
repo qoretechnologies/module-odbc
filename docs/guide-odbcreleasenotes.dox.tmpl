@@ -23,6 +23,9 @@
       including dense buffers for integer, floating-point, and safe numeric/decimal columns
 
     @subsection odbcv2_fixes Bug Fixes
+    - bound a \c NULL or \c NOTHING argument, or a missing argument, for a \c %v placeholder as \c NULL; the
+      driver could get fewer parameters than the command has placeholders and fail with an error such as
+      <tt>[07002] The # of IPD parameters 1 < 2 the # of parameter markers</tt>
     - validated timeout syntax and range, accepted zero explicitly, and checked connection attribute errors
     - requested native connection cancellation and preserved pending Qore cancellation after native connection returns
 
