@@ -98,7 +98,9 @@ private:
         const SQLSMALLINT type;
     };
 
-    QoreSandboxManagerHelper smh;
+    //! the governing sandbox, whose interrupt cancels the running query; not a policy check, so a
+    //! system-policy capability (a policy barrier) does not stop the sandbox from interrupting it
+    QoreSandboxManagerHelper smh{QoreSandboxManagerHelper::All};
     std::shared_ptr<State> state;
 };
 
