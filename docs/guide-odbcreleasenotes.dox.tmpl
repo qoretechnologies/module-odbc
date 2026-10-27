@@ -23,6 +23,8 @@
       including dense buffers for integer, floating-point, and safe numeric/decimal columns
 
     @subsection odbcv2_fixes Bug Fixes
+    - did not add the \c "preserve-case" option to the ODBC connection string, as it is an option of this driver
+      and not of the ODBC driver; with \c NULL as its value, the connection could not be opened
     - bound a \c NULL or \c NOTHING argument, or a missing argument, for a \c %v placeholder as \c NULL; the
       driver could get fewer parameters than the command has placeholders and fail with an error such as
       <tt>[07002] The # of IPD parameters 1 < 2 the # of parameter markers</tt>

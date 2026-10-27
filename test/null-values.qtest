@@ -1,0 +1,209 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests NULL given to odbc_bind() and as the value of a connection option: the outcome is the same in every
+# execution mode, as in the AST interpreter.  The AST interpreter and the IR and JIT engines pass a literal NULL to a
+# builtin differently, so the calls are made from code parsed in each execution mode: from functions and methods,
+# with a literal NULL and NULL from a variable.
+# Runs against PostgreSQL (psqlODBC) and SQL Server (Microsoft ODBC Driver, FreeTDS) given in QORE_DB_CONNSTR_ODBC.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class OdbcNullValuesTest
+
+class OdbcNullValuesTest inherits QUnit::Test {
+    public {
+        #! the execution modes that the calls are made in
+        const Modes = {"ast": EM_AST, "ir": EM_IR, "jit": EM_JIT, "tiered": EM_TIERED};
+
+        #! the outcome of binding NULL with odbc_bind(ODBCT_SLONG, ...) for a single row
+        const SingleBindError = "ODBC-BIND-ERROR: non-int value passed with ODBCT_SLONG odbc_bind";
+
+        #! the outcome of binding NULL with odbc_bind(ODBCT_SLONG, ...) for an array of rows
+        const ArrayBindError = "ODBC-BIND-ERROR: non-int value or non-int list passed with ODBCT_SLONG odbc_bind";
+
+        #! the code run in each execution mode; each function returns "ok" or the exception as "err: desc"
+        const Code = "%modern
+string sub outcome(code c) {
+    try {
+        c();
+        return \"ok\";
+    } catch (hash<ExceptionInfo> ex) {
+        return ex.err + \": \" + ex.desc;
+    }
+}
+
+string sub insert(Datasource ds, string table, auto k, hash<auto> a) {
+    on_exit ds.rollback();
+    return outcome(sub () { ds.exec(\"insert into \" + table + \" (k, a) values (%v, %v)\", k, a); });
+}
+
+string sub bind_literal(Datasource ds, string table) {
+    on_exit ds.rollback();
+    return outcome(sub () {
+        ds.exec(\"insert into \" + table + \" (k, a) values (%v, %v)\", 1, odbc_bind(ODBCT_SLONG, NULL));
+    });
+}
+string sub bind_variable(Datasource ds, string table) {
+    auto n = NULL;
+    return insert(ds, table, 1, odbc_bind(ODBCT_SLONG, n));
+}
+string sub array_bind_literal(Datasource ds, string table) {
+    on_exit ds.rollback();
+    return outcome(sub () {
+        ds.exec(\"insert into \" + table + \" (k, a) values (%v, %v)\", (1, 2), odbc_bind(ODBCT_SLONG, NULL));
+    });
+}
+string sub array_bind_variable(Datasource ds, string table) {
+    auto n = NULL;
+    return insert(ds, table, (1, 2), odbc_bind(ODBCT_SLONG, n));
+}
+
+string sub open_with(string connstr, string opt, auto val) {
+    Datasource ds(connstr);
+    return outcome(sub () {
+        ds.setOption(opt, val);
+        ds.open();
+        ds.close();
+    });
+}
+string sub preserve_case_literal(string connstr) {
+    Datasource ds(connstr);
+    return outcome(sub () {
+        ds.setOption(\"preserve-case\", NULL);
+        ds.open();
+        ds.close();
+    });
+}
+string sub preserve_case_variable(string connstr) {
+    auto n = NULL;
+    return open_with(connstr, \"preserve-case\", n);
+}
+string sub conn_literal(string connstr) {
+    Datasource ds(connstr);
+    return outcome(sub () {
+        ds.setOption(\"conn\", NULL);
+        ds.open();
+        ds.close();
+    });
+}
+
+class NullValues {
+    string bindLiteral(Datasource ds, string table) {
+        on_exit ds.rollback();
+        return outcome(sub () {
+            ds.exec(\"insert into \" + table + \" (k, a) values (%v, %v)\", 1, odbc_bind(ODBCT_SLONG, NULL));
+        });
+    }
+    string arrayBindLiteral(Datasource ds, string table) {
+        on_exit ds.rollback();
+        return outcome(sub () {
+            ds.exec(\"insert into \" + table + \" (k, a) values (%v, %v)\", (1, 2), odbc_bind(ODBCT_SLONG, NULL));
+        });
+    }
+    string preserveCaseLiteral(string connstr) {
+        Datasource ds(connstr);
+        return outcome(sub () {
+            ds.setOption(\"preserve-case\", NULL);
+            ds.open();
+            ds.close();
+        });
+    }
+}
+string sub method_bind_literal(Datasource ds, string table) {
+    return (new NullValues()).bindLiteral(ds, table);
+}
+string sub method_array_bind_literal(Datasource ds, string table) {
+    return (new NullValues()).arrayBindLiteral(ds, table);
+}
+string sub method_preserve_case_literal(string connstr) {
+    return (new NullValues()).preserveCaseLiteral(connstr);
+}
+";
+    }
+
+    private {
+        *string connstr;
+        *Datasource ds;
+        string table;
+    }
+
+    constructor() : Test("ODBC NULL values test", "1.0") {
+        addTestCase("NULL given to odbc_bind() in each execution mode", \bindTest());
+        addTestCase("NULL as the value of a connection option in each execution mode", \optionTest());
+
+        connstr = ENV.QORE_DB_CONNSTR_ODBC;
+        if (connstr) {
+            ds = new Datasource(connstr);
+            ds.open();
+            string driver = ds.getDriverRealName();
+            if (driver != "PostgreSQL" && driver !~ /SQL Server/i) {
+                ds.close();
+                remove ds;
+            } else {
+                table = sprintf("odbc_null_values_%d_%d", getpid(), now_us() % 1000000000);
+                ds.exec("create table " + table + " (k int, a int)");
+                ds.commit();
+            }
+        }
+
+        set_return_value(main());
+    }
+
+    globalTearDown() {
+        if (ds) {
+            ds.rollback();
+            ds.exec("drop table " + table);
+            ds.commit();
+            ds.close();
+        }
+    }
+
+    setUp() {
+        if (!ds) {
+            testSkip("QORE_DB_CONNSTR_ODBC does not give a PostgreSQL or SQL Server connection");
+        }
+    }
+
+    bindTest() {
+        foreach hash<auto> mode in (Modes.pairIterator()) {
+            Program pgm = getProgram(mode.key, mode.value);
+            foreach string func in ("bind_literal", "bind_variable", "method_bind_literal") {
+                assertEq(SingleBindError, pgm.callFunction(func, ds, table), mode.key + " " + func);
+            }
+            foreach string func in ("array_bind_literal", "array_bind_variable", "method_array_bind_literal") {
+                assertEq(ArrayBindError, pgm.callFunction(func, ds, table), mode.key + " " + func);
+            }
+        }
+        # nothing was inserted
+        assertEq(0, ds.selectRow("select count(*) as cnt from " + table).cnt.toInt());
+    }
+
+    optionTest() {
+        foreach hash<auto> mode in (Modes.pairIterator()) {
+            Program pgm = getProgram(mode.key, mode.value);
+            # preserve-case is an option of the module, which is not given to the driver: it can be NULL
+            foreach string func in ("preserve_case_literal", "preserve_case_variable",
+                    "method_preserve_case_literal") {
+                assertEq("ok", pgm.callFunction(func, connstr), mode.key + " " + func);
+            }
+            assertEq("ODBC-OPTION-ERROR: non-string value passed for the 'conn' option",
+                pgm.callFunction("conn_literal", connstr), mode.key + " conn_literal");
+        }
+    }
+
+    private Program getProgram(string name, ExecMode mode) {
+        Program pgm();
+        pgm.setExecMode(mode);
+        pgm.parse(Code, "null-values-" + name);
+        return pgm;
+    }
+}

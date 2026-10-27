@@ -834,6 +834,9 @@ int ODBCConnection::prepareConnectionString(ExceptionSink* xsink) {
         if (!strcasecmp(OPT_CONN_TIMEOUT, hi.getKey())) {
             continue;
         }
+        if (!strcasecmp(OPT_PRESERVE_CASE, hi.getKey())) {
+            continue;
+        }
 
         // Append options to the connection string.
         qore_type_t ntype = val.getType();
