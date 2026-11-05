@@ -15,8 +15,8 @@ default:
 
 variables:
   REPO_NAME: module-odbc
-  POSTGRES_PASSWORD: omq
-  QORE_DB_CONNSTR_ODBC: 'odbc:postgres/omq@(UTF8){conn=driver=PostgreSQL Unicode;Server=postgres;Database=postgres}'
+  POSTGRES_PASSWORD: qore
+  QORE_DB_CONNSTR_ODBC: 'odbc:postgres/qore@(UTF8){conn=driver=PostgreSQL Unicode;Server=postgres;Database=postgres}'
   TZ: Europe/Prague
   PGTZ: Europe/Prague
 

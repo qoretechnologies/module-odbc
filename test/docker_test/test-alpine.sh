@@ -20,17 +20,17 @@ odbcinst -i -d -f /tmp/psqlodbc.ini
 # Check if we're running with postgres service in CI (k8s)
 if getent hosts postgres > /dev/null 2>&1; then
     echo "Using postgres service from CI"
-    export OMQ_DB_USER=postgres
-    export OMQ_DB_PASS=omq
-    export OMQ_DB_NAME=postgres
-    export OMQ_DB_HOST=postgres
-    export QORE_DB_CONNSTR_ODBC="odbc:${OMQ_DB_USER}/${OMQ_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${OMQ_DB_HOST};Database=${OMQ_DB_NAME}}"
+    export QORE_DB_USER=postgres
+    export QORE_DB_PASS=qore
+    export QORE_DB_NAME=postgres
+    export QORE_DB_HOST=postgres
+    export QORE_DB_CONNSTR_ODBC="odbc:${QORE_DB_USER}/${QORE_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${QORE_DB_HOST};Database=${QORE_DB_NAME}}"
 
     # Wait for PostgreSQL to be ready
     printf "waiting on PostgreSQL server: "
     waited=0
     while true; do
-        if PGPASSWORD=${OMQ_DB_PASS} psql -h ${OMQ_DB_HOST} -U ${OMQ_DB_USER} -d ${OMQ_DB_NAME} -c "SELECT 1" > /dev/null 2>&1; then
+        if PGPASSWORD=${QORE_DB_PASS} psql -h ${QORE_DB_HOST} -U ${QORE_DB_USER} -d ${QORE_DB_NAME} -c "SELECT 1" > /dev/null 2>&1; then
             echo "ready"
             break
         fi
@@ -46,7 +46,7 @@ else
     echo "Using shared postgres host"
     . test/docker_test/postgres_lib.sh
     setup_postgres_on_host
-    export QORE_DB_CONNSTR_ODBC="odbc:${OMQ_DB_USER}/omq@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${OMQ_DB_HOST};Database=${OMQ_DB_NAME}}"
+    export QORE_DB_CONNSTR_ODBC="odbc:${QORE_DB_USER}/${QORE_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${QORE_DB_HOST};Database=${QORE_DB_NAME}}"
 fi
 
 # setup MODULE_SRC_DIR env var
