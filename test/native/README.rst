@@ -49,7 +49,7 @@ any configured database::
 Connection option failures
 --------------------------
 
-``python3 test/native/run-connection-options.py build-debug/odbc-api-2.0.qmod``
+``python3 test/native/run-connection-options.py build-debug/odbc-api-$(qore --latest-module-api).qmod``
 checks rejected and coerced transaction/timeout attributes before network access,
 including zero and the maximum unsigned 32-bit timeout. ``--valgrind`` runs each
 case under Memcheck. The interposer is private to each subprocess. See

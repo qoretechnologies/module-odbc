@@ -27,9 +27,9 @@ Apply in a separate native-driver checkout::
 The C language mode is explicit because this release predates C23. Test without
 installing or changing the system's driver registration::
 
-    python3 test/native/port-list.py build-debug/odbc-api-2.0.qmod /path/to/psqlodbc/.libs/psqlodbcw.so
+    python3 test/native/port-list.py build-debug/odbc-api-$(qore --latest-module-api).qmod /path/to/psqlodbc/.libs/psqlodbcw.so
     QORE_TEST_ODBC_DRIVER=/path/to/psqlodbc/.libs/psqlodbcw.so \
-      qore -b --enable-debug -l build-debug/odbc-api-2.0.qmod test/connection-setup.qtest
+      qore -b --enable-debug -l build-debug/odbc-api-$(qore --latest-module-api).qmod test/connection-setup.qtest
 
 The port test uses two real loopback endpoints and verifies that the second
 receives the startup packet after the first remains silent. It fails with the
