@@ -93,7 +93,7 @@ done
 ${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/build gosu qore:qore
 
 # Exercise native connection-option failures without a database.
-python3 test/native/run-connection-options.py build/odbc-api-2.0.qmod
+python3 test/native/run-connection-options.py "build/odbc-api-$(qore --latest-module-api).qmod"
 RESULTS="$RESULTS $?"
 
 # Cleanup if using shared host
