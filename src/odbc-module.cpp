@@ -48,6 +48,9 @@ static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink);
 static void odbc_module_ns_init(QoreNamespace* rns, QoreNamespace* qns, ExceptionSink& xsink);
 static void odbc_module_delete();
 
+// the module's namespace; purged when the module is deleted (see QoreModuleInfo::ns)
+QoreNamespace OdbcNS("odbc");
+
 extern "C" DLLEXPORT void odbc_qore_module_desc(QoreModuleInfo& mod_info) {
     mod_info.name = "odbc";
     mod_info.version = PACKAGE_VERSION;
@@ -59,6 +62,10 @@ extern "C" DLLEXPORT void odbc_qore_module_desc(QoreModuleInfo& mod_info) {
     mod_info.init = odbc_module_init;
     mod_info.ns_init = odbc_module_ns_init;
     mod_info.del = odbc_module_delete;
+#ifdef QORE_HAS_MODULE_NS_PURGE
+    // the namespace is purged when the module is deleted, before the types are freed (see QoreModuleInfo::ns)
+    mod_info.ns = &OdbcNS;
+#endif
     mod_info.license = QL_MIT;
     mod_info.license_str = "MIT";
 }
@@ -405,8 +412,6 @@ static QoreValue odbc_opt_get(const Datasource* ds, const char* opt) {
     }
     return conn->getOption(opt);
 }
-
-QoreNamespace OdbcNS("odbc");
 
 static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
     init_odbc_functions(OdbcNS);
