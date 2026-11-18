@@ -39,6 +39,9 @@
 #endif
 
 #include "ODBCConnection.h"
+#ifdef HAVE_ODBCINST
+#include "ODBCConnectTargets.h"
+#endif
 #include "ODBCPreparedStatement.h"
 
 void init_odbc_functions(QoreNamespace& ns);
@@ -466,6 +469,10 @@ static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
 
     methods.add(QDBI_METHOD_OPT_SET, odbc_opt_set);
     methods.add(QDBI_METHOD_OPT_GET, odbc_opt_get);
+#if defined(QDBI_METHOD_GET_CONNECT_TARGETS) && defined(HAVE_ODBCINST)
+    // the destinations of a connection, which the Qore library checks against the sandbox of the code that chose it
+    methods.add(QDBI_METHOD_GET_CONNECT_TARGETS, qore_odbc_targets::get_connect_targets);
+#endif
 
     methods.registerOption(DBI_OPT_NUMBER_OPT, "when set, numeric/decimal values are returned as integers if "
         "possible, otherwise as arbitrary-precision number values; the argument is ignored; setting this option "

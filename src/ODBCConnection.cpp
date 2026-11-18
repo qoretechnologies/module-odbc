@@ -26,6 +26,9 @@
 */
 
 #include "ODBCConnection.h"
+#ifdef HAVE_ODBCINST
+#include "ODBCConnectTargets.h"
+#endif
 
 #include <charconv>
 #include <limits>
@@ -68,7 +71,7 @@ ODBCConnection::ODBCConnection(Datasource* d, ExceptionSink* xsink) : ds(d), con
     }
 
     // Prepare ODBC connection string.
-    if (prepareConnectionString(xsink)) {
+    if (prepareConnectionString(ds, connStr, xsink)) {
         return;
     }
 
@@ -208,7 +211,18 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
     // Connect
     {
         ODBCCancelHelper cancel_helper(dbc, SQL_HANDLE_DBC);
-        ret = SQLDriverConnectA(dbc, 0, (SQLCHAR*)connStr.c_str(), connStr.length(), 0, 0, 0, SQL_DRIVER_NOPROMPT);
+        // a connection checked against a sandbox is pinned to the checked address, also when it is made again
+        QoreString pinned(QCS_UTF8);
+        const QoreString* cs = &connStr;
+#if defined(QDBI_METHOD_GET_CONNECT_TARGETS) && defined(HAVE_ODBCINST)
+        if (const QoreListNode* checked = ds->getCheckedConnectTargets()) {
+            if (qore_odbc_targets::checked_connection_string(connStr, checked, pinned, xsink)) {
+                return -1;
+            }
+            cs = &pinned;
+        }
+#endif
+        ret = SQLDriverConnectA(dbc, 0, (SQLCHAR*)cs->c_str(), cs->strlen(), 0, 0, 0, SQL_DRIVER_NOPROMPT);
     }
     // Preserve cancellation even when the native driver cannot cancel connection establishment.
     connected = SQL_SUCCEEDED(ret);
@@ -776,7 +790,7 @@ int ODBCConnection::setConnectionTimeoutOption(QoreValue val, ExceptionSink* xsi
     return parse_timeout_option(val, OPT_CONN_TIMEOUT, options.connTimeout, xsink);
 }
 
-int ODBCConnection::prepareConnectionString(ExceptionSink* xsink) {
+int ODBCConnection::prepareConnectionString(Datasource* ds, QoreString& connStr, ExceptionSink* xsink) {
     {
         const std::string& db = ds->getDBNameStr();
         if (!db.empty()) {
