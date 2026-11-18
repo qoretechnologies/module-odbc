@@ -15,9 +15,8 @@
     @subsection odbcv2_features New Features
 
     - <b>Security</b>: the module reports the destinations of its connections for the PostgreSQL, MySQL and MariaDB
-      and SQL Server (Microsoft ODBC Driver 17 and 18) drivers, so that code under a sandbox that restricts the
-      network can connect where the policy of the sandbox allows, and connects only to the checked address; other
-      connections are refused: see @ref odbcsandbox
+      drivers, so that code under a sandbox that restricts the network can connect where the policy of the sandbox
+      allows, and connects only to the checked address; other connections are refused: see @ref odbcsandbox
     - Return the underlying ODBC driver name with @ref Qore::SQL::Datasource::getDriverRealName() "Datasource::getDriverRealName()"
       (<a href="https://github.com/qorelanguage/qore/issues/4690">issue 4690</a>)
     - Native typed results through @ref Qore::SQL::Datasource::selectTyped() "Datasource::selectTyped()" and

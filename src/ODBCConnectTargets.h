@@ -38,16 +38,16 @@
     - PostgreSQL (psqlODBC): \c Servername or \c Server, \c Port (5432); the connection is pinned to the checked
       address with <tt>pqopt={hostaddr=...}</tt>, which keeps the host name for TLS;
     - MySQL and MariaDB (Connector/ODBC): \c Server, \c Port (3306); pinned by replacing the server, so a mode that
-      verifies the server's host name (\c SSLMODE=VERIFY_IDENTITY, \c SSL_VERIFY_SERVER_CERT) is refused;
-    - Microsoft ODBC Driver 17 and 18 for SQL Server: \c Server (<tt>[tcp:]host[,port]</tt>, 1433); pinned by
-      replacing the server; driver 18 keeps the host name for the certificate check with \c HostNameInCertificate,
-      while driver 17 refuses an encrypted connection that verifies the certificate.
+      verifies the server's host name (\c SSLMODE=VERIFY_IDENTITY, \c SSL_VERIFY_SERVER_CERT) is refused.
+
+    The Microsoft ODBC Driver for SQL Server is refused: the server can route the connection to another server
+    during the login (TDS routing), which the driver follows without a check, so the destination is not known
+    beforehand.
 
     Everything else is refused with \c NETWORK-ACCESS-DENIED and the reason: another driver (named in the message),
-    FreeTDS and SQLite drivers (for now), a DSN that is not found, a connection string with both \c DSN and
-    \c DRIVER, a file DSN, a local socket or an empty host, a host list, a SQL Server named instance without a port
-    (the SQL Server Browser resolves it), a named pipe or shared memory, and libpq options (\c pqopt) set by the
-    connection itself.
+    the Microsoft ODBC Driver for SQL Server and the FreeTDS driver (TDS routing), the SQLite driver, a DSN that is
+    not found, a connection string with both \c DSN and \c DRIVER, a file DSN, a local socket or an empty host, a
+    host list, and libpq options (\c pqopt) set by the connection itself.
 */
 
 #include <odbcinst.h>
@@ -198,7 +198,7 @@ public:
 };
 
 //! the drivers whose destinations are known
-enum DriverKind { DK_POSTGRESQL, DK_MYSQL, DK_MSSQL17, DK_MSSQL18 };
+enum DriverKind { DK_POSTGRESQL, DK_MYSQL };
 
 //! a destination: a host and a port
 struct Target {
@@ -228,12 +228,13 @@ static inline bool get_driver(const ConnectionKeys& ck, DriverKind& kind, std::s
         kind = DK_POSTGRESQL;
     } else if (base.find("myodbc") != std::string::npos || base.find("maodbc") != std::string::npos) {
         kind = DK_MYSQL;
-    } else if (base.find("msodbcsql-17") != std::string::npos || base.find("msodbcsql17") != std::string::npos) {
-        kind = DK_MSSQL17;
-    } else if (base.find("msodbcsql-18") != std::string::npos || base.find("msodbcsql18") != std::string::npos) {
-        kind = DK_MSSQL18;
+    } else if (base.find("msodbcsql") != std::string::npos) {
+        err = "connections with the Microsoft ODBC Driver for SQL Server cannot be checked against the sandbox: the "
+            "server can route the connection to another server during the login (TDS routing)";
+        return false;
     } else if (base.find("tdsodbc") != std::string::npos) {
-        err = "connections with the FreeTDS ODBC driver cannot be checked against the sandbox yet";
+        err = "connections with the FreeTDS ODBC driver cannot be checked against the sandbox: the server can route "
+            "the connection to another server during the login (TDS routing)";
         return false;
     } else if (base.find("sqlite") != std::string::npos) {
         err = "connections with the SQLite ODBC driver cannot be checked against the sandbox";
@@ -327,57 +328,6 @@ static inline bool get_target(const std::string& conn_str, ConnectionKeys& ck, D
             }
             break;
         }
-        case DK_MSSQL17:
-        case DK_MSSQL18: {
-            if (ck.has("ADDRESS") || ck.has("ADDR")) {
-                err = "a SQL Server connection with Address cannot be checked against the sandbox";
-                return false;
-            }
-            std::string server = trim(ck.get("SERVER"));
-            std::string lserver = lower(server);
-            if (lserver.compare(0, 4, "tcp:") == 0) {
-                server = trim(server.substr(4));
-            } else if (lserver.compare(0, 3, "np:") == 0 || lserver.compare(0, 4, "lpc:") == 0
-                    || lserver.compare(0, 6, "admin:") == 0) {
-                err = "a SQL Server connection over a named pipe, shared memory or the admin connection cannot be "
-                    "checked against the sandbox";
-                return false;
-            }
-            std::string port;
-            size_t comma = server.find(',');
-            if (comma != std::string::npos) {
-                port = trim(server.substr(comma + 1));
-                server = trim(server.substr(0, comma));
-            }
-            size_t bs = server.find('\\');
-            if (bs != std::string::npos) {
-                if (port.empty()) {
-                    err = "a SQL Server named instance without a port cannot be checked against the sandbox (the "
-                        "SQL Server Browser resolves it)";
-                    return false;
-                }
-                server = server.substr(0, bs);
-            }
-            if (server.empty() || server == "." || lower(server) == "(local)") {
-                err = "a connection to a local SQL Server cannot be checked against the sandbox";
-                return false;
-            }
-            t.host = server;
-            if (!parse_port(port, 1433, t.port, err)) {
-                return false;
-            }
-            if (kind == DK_MSSQL17) {
-                std::string enc = lower(trim(ck.get("ENCRYPT")));
-                if ((enc == "yes" || enc == "mandatory" || enc == "true" || enc == "strict")
-                        && !is_true(ck.get("TRUSTSERVERCERTIFICATE"))) {
-                    err = "an encrypted connection of ODBC Driver 17 for SQL Server that verifies the server's "
-                        "certificate cannot be checked against the sandbox yet: the driver would connect to the "
-                        "checked numeric address";
-                    return false;
-                }
-            }
-            break;
-        }
     }
     if (t.host.empty()) {
         err = "a connection to a local socket of the server cannot be checked against the sandbox";
@@ -411,16 +361,6 @@ static inline std::string pin_keys(const ConnectionKeys& ck, DriverKind kind, co
                 + brace("hostaddr=" + addr) + ";";
         case DK_MYSQL:
             return "Server=" + brace(addr) + ";Port=" + std::to_string(t.port) + ";";
-        case DK_MSSQL17:
-        case DK_MSSQL18: {
-            std::string rv = "Server=" + brace("tcp:" + (addr.find(':') != std::string::npos ? "[" + addr + "]" : addr)
-                + "," + std::to_string(t.port)) + ";";
-            if (kind == DK_MSSQL18 && !ck.has("HOSTNAMEINCERTIFICATE")) {
-                // the certificate is still checked against the host name
-                rv += "HostNameInCertificate=" + brace(t.host) + ";";
-            }
-            return rv;
-        }
     }
     return std::string();
 }

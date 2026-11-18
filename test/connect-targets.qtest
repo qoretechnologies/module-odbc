@@ -4,7 +4,7 @@
 #
 # The destinations of an ODBC connection (QDBI_METHOD_GET_CONNECT_TARGETS): code under a sandbox that restricts the
 # network can connect to the destination that its policy allows, which the module determines for the drivers that it
-# knows (psqlODBC, MySQL and MariaDB Connector/ODBC, Microsoft ODBC Driver 17 and 18 for SQL Server) from the
+# knows (psqlODBC, MySQL and MariaDB Connector/ODBC) from the
 # connection string merged with its DSN, read through the driver manager; everything else is refused.
 #
 # No database or ODBC driver is needed: odbcinst.ini names drivers whose libraries do not exist (the module knows a
@@ -61,7 +61,7 @@ public class ConnectTargetsTest inherits QUnit::Test {
     constructor() : QUnit::Test("ODBC connect targets", "1.0", \ARGV) {
         addTestCase("PostgreSQL", \postgresql());
         addTestCase("MySQL and MariaDB", \mysql());
-        addTestCase("SQL Server", \mssql());
+        addTestCase("SQL Server drivers are refused (TDS routing)", \mssql());
         addTestCase("DSNs resolved by the driver manager", \dsns());
         addTestCase("what cannot be checked is refused", \refused());
         addTestCase("a sandboxed connection to the database", \database());
@@ -123,17 +123,12 @@ Servername = %s
     mssql() {
         list<hash<auto>> r = run((
             {"db": sprintf("DRIVER={ODBC Driver 18 for SQL Server};Server=tcp:%s,1", Allowed)},
-            {"db": sprintf("DRIVER={ODBC Driver 18 for SQL Server};Server=%s", Denied)},
-            {"db": sprintf("DRIVER={ODBC Driver 18 for SQL Server};Server=%s\\inst,1", Allowed)},
-            {"db": sprintf("DRIVER={ODBC Driver 17 for SQL Server};Server=%s,1;Encrypt=yes;TrustServerCertificate=yes",
-                Allowed)},
             {"db": sprintf("DRIVER={ODBC Driver 17 for SQL Server};Server=%s,1433", Denied)},
+            {"db": sprintf("DRIVER=/usr/lib/libmsodbcsql-18.so;Server=%s,1", Allowed)},
         ));
-        assertAllowed(r[0], "tcp: prefix and port");
-        assertDenied(r[1], "default port");
-        assertAllowed(r[2], "named instance with a port");
-        assertAllowed(r[3], "driver 17, encrypted without certificate check");
-        assertDenied(r[4], "driver 17");
+        assertRefused(r[0], "TDS routing", "driver 18");
+        assertRefused(r[1], "TDS routing", "driver 17");
+        assertRefused(r[2], "TDS routing", "driver by path");
     }
 
     dsns() {
@@ -164,26 +159,20 @@ Servername = %s
             {"db": sprintf("DRIVER={PostgreSQL};Servername=%s,%s", Allowed, Denied)},
             {"db": "DRIVER={MariaDB};SERVER=localhost"},
             {"db": sprintf("DRIVER={MariaDB};SERVER=%s;SSLMODE=VERIFY_IDENTITY", Allowed)},
-            {"db": sprintf("DRIVER={ODBC Driver 18 for SQL Server};Server=%s\\inst", Allowed)},
-            {"db": "DRIVER={ODBC Driver 18 for SQL Server};Server=np:\\\\host\\pipe\\sql\\query"},
-            {"db": sprintf("DRIVER={ODBC Driver 17 for SQL Server};Server=%s,1;Encrypt=yes", Allowed)},
             {"db": "DRIVER={Unknown Driver};Server=x"},
         ));
         assertRefused(r[0], "is not defined", "missing DSN");
         assertRefused(r[1], "both DSN and DRIVER", "DSN and DRIVER");
         assertRefused(r[2], "file DSN", "file DSN");
         assertRefused(r[3], "'Other'", "unknown driver, named");
-        assertRefused(r[4], "FreeTDS", "FreeTDS");
+        assertRefused(r[4], "TDS routing", "FreeTDS");
         assertRefused(r[5], "SQLite", "SQLite");
         assertRefused(r[6], "local socket", "empty host");
         assertRefused(r[7], "pqopt", "pqopt");
         assertRefused(r[8], "list of servers", "host list");
         assertRefused(r[9], "local socket", "MySQL localhost");
         assertRefused(r[10], "verifies the host name", "MySQL VERIFY_IDENTITY");
-        assertRefused(r[11], "named instance", "named instance without a port");
-        assertRefused(r[12], "named pipe", "named pipe");
-        assertRefused(r[13], "Driver 17", "driver 17, encrypted with certificate check");
-        assertRefused(r[14], "not defined in odbcinst.ini", "driver not in odbcinst.ini");
+        assertRefused(r[11], "not defined in odbcinst.ini", "driver not in odbcinst.ini");
     }
 
     #! a sandboxed Program connects to the database of QORE_DB_CONNSTR_ODBC, pinned to the checked address

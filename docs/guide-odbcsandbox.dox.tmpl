@@ -26,15 +26,14 @@
     |!Driver|!Destination|!Connection to the checked address
     |PostgreSQL (psqlODBC)|\c Servername or \c Server, \c Port (default 5432)|<tt>pqopt={hostaddr=...}</tt>; the host name is kept for TLS
     |MySQL and MariaDB (Connector/ODBC)|\c Server, \c Port (default 3306)|the server is replaced by the address; a connection that verifies the server's host name (\c SSLMODE=VERIFY_IDENTITY, \c SSL_VERIFY_SERVER_CERT) is refused
-    |Microsoft ODBC Driver 18 for SQL Server|<tt>Server=[tcp:]host[\\instance],port</tt> (default port 1433)|the server is replaced by the address, and \c HostNameInCertificate keeps the host name for the certificate check
-    |Microsoft ODBC Driver 17 for SQL Server|the same|the server is replaced by the address; an encrypted connection that verifies the certificate is refused
 
     @section odbc_sandbox_refused Connections that are Refused
 
-    - connections with any other driver (named in the message), including the FreeTDS and SQLite drivers for now
+    - connections with the Microsoft ODBC Driver for SQL Server and the FreeTDS driver: the server can route the
+      connection to another server during the login (TDS routing), which the driver follows without a check
+    - connections with any other driver (named in the message), including the SQLite driver
     - a DSN that is not defined, a connection string with both \c DSN and \c DRIVER, and file DSNs
-    - local sockets and empty hosts, lists of servers, SQL Server named instances without a port (which the SQL
-      Server Browser resolves), named pipes and shared memory
+    - local sockets and empty hosts, and lists of servers
     - libpq options set by the connection itself (\c pqopt)
 
     @since odbc 2.0
