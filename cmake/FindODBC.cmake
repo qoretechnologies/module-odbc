@@ -52,4 +52,18 @@ endif()
 
 set(ODBC_LIBRARIES ${ODBC_LIBRARY})
 
+# the installer library of the driver manager, which reads odbc.ini and odbcinst.ini (SQLGetPrivateProfileString());
+# the module reports the destinations of its connections to the sandbox only with it
+find_library(ODBCINST_LIBRARY NAMES odbcinst iodbcinst
+    PATHS
+    /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}
+    /usr/lib
+    /usr/local/lib
+    $ENV{ODBC_DIR}/lib
+)
+if(ODBCINST_LIBRARY)
+    list(APPEND ODBC_LIBRARIES ${ODBCINST_LIBRARY})
+    set(ODBCINST_FOUND 1)
+endif()
+
 MARK_AS_ADVANCED( ODBC_FOUND ODBC_LIBRARY ODBC_EXTRA_LIBRARIES ODBC_INCLUDE_DIR )

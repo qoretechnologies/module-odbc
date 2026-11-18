@@ -49,6 +49,10 @@ namespace odbc {
 //! A class representing an ODBC connection.
 class ODBCConnection {
 public:
+    //! builds the connection string of the datasource in \a conn_str; also used without a connection, to determine
+    //! the destinations of one (see ODBCConnectTargets.h)
+    DLLLOCAL static int prepareConnectionString(Datasource* ds, QoreString& conn_str, ExceptionSink* xsink);
+
     //! Constructor.
     /** @param d Qore datasource
         @param xsink exception sink
@@ -348,7 +352,6 @@ private:
 
         @return 0 for OK, -1 for error
      */
-    DLLLOCAL int prepareConnectionString(ExceptionSink* xsink);
 
     // Get DBMS (server) and ODBC DB driver (client) versions.
     DLLLOCAL void getVersions();

@@ -57,11 +57,15 @@ set(QORE_DOX_TMPL_SRC
     docs/guide-odbcexceptions.dox.tmpl
     docs/guide-odbcoptions.dox.tmpl
     docs/guide-odbcreleasenotes.dox.tmpl
+    docs/guide-odbcsandbox.dox.tmpl
     docs/guide-odbcschema.dox.tmpl
     docs/guide-odbcstoredprocs.dox.tmpl
 )
 
 add_library(${module_name} MODULE ${CPP_SRC} ${QPP_SOURCES})
+if(ODBCINST_FOUND)
+    target_compile_definitions(${module_name} PRIVATE HAVE_ODBCINST)
+endif()
 
 if (WIN32 AND MINGW AND MSYS)
     target_compile_definitions(${module_name} PUBLIC BUILDING_DLL)
@@ -81,6 +85,7 @@ list(APPEND MODULE_DOX_INPUT
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcexceptions.dox
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcoptions.dox
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcreleasenotes.dox
+    ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcsandbox.dox
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcschema.dox
     ${CMAKE_CURRENT_BINARY_DIR}/guide-odbcstoredprocs.dox
 )

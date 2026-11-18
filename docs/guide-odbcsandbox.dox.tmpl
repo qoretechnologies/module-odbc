@@ -1,0 +1,40 @@
+/* Copyright (C) 2026 Qore Technologies, s.r.o. */
+
+/** @page odbcsandboxguide Connections from Sandboxed Code
+
+    @tableofcontents
+
+    @section odbc_sandbox_intro Introduction
+
+    When the connection values of a \c Datasource or \c DatasourcePool were chosen by code under a sandbox that
+    restricts network access, %Qore checks the destination of each connection against the network policy of that
+    sandbox before the driver connects.  Where an ODBC connection goes depends on its ODBC driver, so the module
+    determines the destination only for the drivers below, from the keys of the connection string merged with those
+    of its DSN, which are read through the driver manager (\c SQLGetPrivateProfileString(): \c odbc.ini and
+    \c odbcinst.ini, the user DSN before the system one, the connection string before the DSN), so that the
+    resolution is the driver manager's.  A connection that the policy allows connects only to the checked address,
+    also when it is made again after it was lost.  A connection whose destination cannot be determined exactly is
+    refused with \c NETWORK-ACCESS-DENIED, and the message says why.
+
+    Connections whose values were chosen by code that no such sandbox governs are made as before.
+
+    @section odbc_sandbox_drivers Drivers
+
+    The driver is the \c DRIVER of the connection string or of its DSN: a driver name from \c odbcinst.ini or the
+    path of its library, which the driver is recognized by.
+
+    |!Driver|!Destination|!Connection to the checked address
+    |PostgreSQL (psqlODBC)|\c Servername or \c Server, \c Port (default 5432)|<tt>pqopt={hostaddr=...}</tt>; the host name is kept for TLS
+    |MySQL and MariaDB (Connector/ODBC)|\c Server, \c Port (default 3306)|the server is replaced by the address; a connection that verifies the server's host name (\c SSLMODE=VERIFY_IDENTITY, \c SSL_VERIFY_SERVER_CERT) is refused
+
+    @section odbc_sandbox_refused Connections that are Refused
+
+    - connections with the Microsoft ODBC Driver for SQL Server and the FreeTDS driver: the server can route the
+      connection to another server during the login (TDS routing), which the driver follows without a check
+    - connections with any other driver (named in the message), including the SQLite driver
+    - a DSN that is not defined, a connection string with both \c DSN and \c DRIVER, and file DSNs
+    - local sockets and empty hosts, and lists of servers
+    - libpq options set by the connection itself (\c pqopt)
+
+    @since odbc 2.0
+*/

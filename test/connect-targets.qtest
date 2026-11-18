@@ -1,0 +1,225 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+#
+# The destinations of an ODBC connection (QDBI_METHOD_GET_CONNECT_TARGETS): code under a sandbox that restricts the
+# network can connect to the destination that its policy allows, which the module determines for the drivers that it
+# knows (psqlODBC, MySQL and MariaDB Connector/ODBC) from the
+# connection string merged with its DSN, read through the driver manager; everything else is refused.
+#
+# No database or ODBC driver is needed: odbcinst.ini names drivers whose libraries do not exist (the module knows a
+# driver by the name of its library), the sandbox denies one address (connect-targets-child.q), so a connection that
+# the check refuses fails with NETWORK-ACCESS-DENIED, and one that it allows fails after the check, when the driver
+# manager cannot load the driver.
+
+%modern
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires QUnit
+%requires FsUtil
+%requires json
+
+%exec-class ConnectTargetsTest
+
+#! an allowed destination
+const Allowed = "127.0.0.1";
+#! the destination that the sandbox denies (see connect-targets-child.q)
+const Denied = "10.255.255.2";
+
+#! the drivers of odbcinst.ini: none of their libraries exists
+const OdbcInst = "[PostgreSQL]
+Driver = /nonexistent/psqlodbcw.so
+
+[MariaDB]
+Driver = /nonexistent/libmaodbc.so
+
+[ODBC Driver 18 for SQL Server]
+Driver = /nonexistent/libmsodbcsql-18.5.so.1.1
+
+[ODBC Driver 17 for SQL Server]
+Driver = /nonexistent/libmsodbcsql-17.10.so.6.1
+
+[FreeTDS]
+Driver = /nonexistent/libtdsodbc.so
+
+[SQLite3]
+Driver = /nonexistent/libsqlite3odbc.so
+
+[Other]
+Driver = /nonexistent/libotherodbc.so
+";
+
+public class ConnectTargetsTest inherits QUnit::Test {
+    private {
+        TmpDir tmp("odbc-connect-targets-");
+        #! the directory of the system odbc.ini and odbcinst.ini (ODBCSYSINI)
+        string sys_dir;
+        #! the user odbc.ini (ODBCINI)
+        string user_ini;
+        int seq = 0;
+    }
+
+    constructor() : QUnit::Test("ODBC connect targets", "1.0", \ARGV) {
+        addTestCase("PostgreSQL", \postgresql());
+        addTestCase("MySQL and MariaDB", \mysql());
+        addTestCase("SQL Server drivers are refused (TDS routing)", \mssql());
+        addTestCase("DSNs resolved by the driver manager", \dsns());
+        addTestCase("what cannot be checked is refused", \refused());
+        addTestCase("a sandboxed connection to the database", \database());
+        set_return_value(main());
+    }
+
+    globalSetUp() {
+        sys_dir = tmp.path + "/sys";
+        mkdir(sys_dir);
+        writeFile(sys_dir + "/odbcinst.ini", OdbcInst);
+        writeFile(sys_dir + "/odbc.ini", sprintf("[pg_denied]
+Driver = PostgreSQL
+Servername = %s
+Port = 5432
+
+[pg_allowed]
+Driver = PostgreSQL
+Servername = %s
+Port = 1
+
+[both]
+Driver = PostgreSQL
+Servername = %s
+", Denied, Allowed, Denied));
+        user_ini = tmp.path + "/user.ini";
+        writeFile(user_ini, sprintf("[both]
+Driver = PostgreSQL
+Servername = %s
+Port = 1
+
+[user_only]
+Driver = PostgreSQL
+Servername = %s
+", Allowed, Denied));
+    }
+
+    postgresql() {
+        list<hash<auto>> r = run((
+            {"db": sprintf("DRIVER={PostgreSQL};Servername=%s;Port=1", Allowed)},
+            {"db": sprintf("DRIVER={PostgreSQL};Servername=%s", Denied)},
+            {"db": sprintf("DRIVER=/usr/lib/psqlodbcw.so;Server=%s;Port=5432", Denied)},
+        ));
+        assertAllowed(r[0], "driver name, Servername");
+        assertDenied(r[1], "default port");
+        assertDenied(r[2], "driver path, Server");
+    }
+
+    mysql() {
+        list<hash<auto>> r = run((
+            {"db": sprintf("DRIVER={MariaDB};SERVER=%s;PORT=1", Allowed)},
+            {"db": sprintf("DRIVER={MariaDB};SERVER=%s", Denied)},
+            {"db": sprintf("DRIVER=/usr/lib/libmyodbc8w.so;SERVER=%s;PORT=3306", Denied)},
+        ));
+        assertAllowed(r[0], "MariaDB");
+        assertDenied(r[1], "default port");
+        assertDenied(r[2], "MySQL by path");
+    }
+
+    mssql() {
+        list<hash<auto>> r = run((
+            {"db": sprintf("DRIVER={ODBC Driver 18 for SQL Server};Server=tcp:%s,1", Allowed)},
+            {"db": sprintf("DRIVER={ODBC Driver 17 for SQL Server};Server=%s,1433", Denied)},
+            {"db": sprintf("DRIVER=/usr/lib/libmsodbcsql-18.so;Server=%s,1", Allowed)},
+        ));
+        assertRefused(r[0], "TDS routing", "driver 18");
+        assertRefused(r[1], "TDS routing", "driver 17");
+        assertRefused(r[2], "TDS routing", "driver by path");
+    }
+
+    dsns() {
+        list<hash<auto>> r = run((
+            {"db": "pg_denied"},
+            {"db": "pg_allowed"},
+            {"db": "DSN=pg_denied;Servername=" + Allowed + ";Port=1"},
+            {"db": "both"},
+            {"db": "user_only"},
+        ));
+        assertDenied(r[0], "system DSN");
+        assertAllowed(r[1], "system DSN, allowed");
+        assertAllowed(r[2], "the connection string wins over the DSN");
+        assertAllowed(r[3], "a user DSN is used before a system DSN of the same name");
+        assertDenied(r[4], "user DSN");
+    }
+
+    refused() {
+        list<hash<auto>> r = run((
+            {"db": "missing_dsn"},
+            {"db": sprintf("DSN=pg_allowed;DRIVER={PostgreSQL};Servername=%s", Allowed)},
+            {"db": "FILEDSN=/tmp/x.dsn"},
+            {"db": sprintf("DRIVER={Other};Server=%s", Allowed)},
+            {"db": sprintf("DRIVER={FreeTDS};Server=%s;Port=1", Allowed)},
+            {"db": "DRIVER={SQLite3};Database=/tmp/x.db"},
+            {"db": "DRIVER={PostgreSQL};Servername=;Port=5432"},
+            {"db": sprintf("DRIVER={PostgreSQL};Servername=%s;pqopt={hostaddr=%s}", Allowed, Denied)},
+            {"db": sprintf("DRIVER={PostgreSQL};Servername=%s,%s", Allowed, Denied)},
+            {"db": "DRIVER={MariaDB};SERVER=localhost"},
+            {"db": sprintf("DRIVER={MariaDB};SERVER=%s;SSLMODE=VERIFY_IDENTITY", Allowed)},
+            {"db": "DRIVER={Unknown Driver};Server=x"},
+        ));
+        assertRefused(r[0], "is not defined", "missing DSN");
+        assertRefused(r[1], "both DSN and DRIVER", "DSN and DRIVER");
+        assertRefused(r[2], "file DSN", "file DSN");
+        assertRefused(r[3], "'Other'", "unknown driver, named");
+        assertRefused(r[4], "TDS routing", "FreeTDS");
+        assertRefused(r[5], "SQLite", "SQLite");
+        assertRefused(r[6], "local socket", "empty host");
+        assertRefused(r[7], "pqopt", "pqopt");
+        assertRefused(r[8], "list of servers", "host list");
+        assertRefused(r[9], "local socket", "MySQL localhost");
+        assertRefused(r[10], "verifies the host name", "MySQL VERIFY_IDENTITY");
+        assertRefused(r[11], "not defined in odbcinst.ini", "driver not in odbcinst.ini");
+    }
+
+    #! a sandboxed Program connects to the database of QORE_DB_CONNSTR_ODBC, pinned to the checked address
+    database() {
+        if (!ENV.QORE_DB_CONNSTR_ODBC) {
+            testSkip("QORE_DB_CONNSTR_ODBC is not set");
+        }
+        hash<auto> r = run(({"connstr": ENV.QORE_DB_CONNSTR_ODBC},), True)[0];
+        assertTrue(r.ok, "the sandboxed connection: " + make_json(r));
+    }
+
+    #! runs the connections in a child process with the test's odbc.ini files (or the system's, with \a system);
+    #! returns their results
+    private list<hash<auto>> run(list<hash<auto>> conns, *bool system) {
+        string json_path = tmp.path + sprintf("/conns-%d.json", ++seq);
+        writeFile(json_path, make_json(conns));
+        string env = system ? "" : sprintf("ODBCSYSINI='%s' ODBCINI='%s' HOME='%s' ", sys_dir, user_ini, tmp.path);
+        string cmd = sprintf("%s%s %s/connect-targets-child.q \"$(cat %s)\" 2>&1", env, ENV.QORE_BINARY ?? "qore",
+            get_script_dir(), json_path);
+        int rc;
+        string out = backquote(cmd, \rc);
+        if (rc) {
+            throw "CHILD-ERROR", sprintf("the child process failed (%d): %s", rc, out);
+        }
+        list<auto> lines = select out.split("\n"), $1;
+        return parse_json(lines.last());
+    }
+
+    private assertAllowed(hash<auto> r, string label) {
+        # the check allowed the connection: it failed after the check (the driver cannot be loaded), or connected
+        assertTrue(r.ok || (r.err && r.err != "NETWORK-ACCESS-DENIED"), label + ": " + make_json(r));
+    }
+
+    private assertDenied(hash<auto> r, string label) {
+        assertEq("NETWORK-ACCESS-DENIED", r.err, label + ": " + make_json(r));
+        assertEq(-1, (r.desc ?? "").find("cannot be checked"), label + ": denied by the policy, not refused: "
+            + make_json(r));
+    }
+
+    private assertRefused(hash<auto> r, string reason, string label) {
+        assertEq("NETWORK-ACCESS-DENIED", r.err, label + ": " + make_json(r));
+        assertNeq(-1, (r.desc ?? "").find(reason), label + ": " + make_json(r));
+    }
+
+    private writeFile(string path, string data) {
+        File f();
+        f.open2(path, O_CREAT | O_WRONLY | O_TRUNC);
+        f.write(data);
+    }
+}
