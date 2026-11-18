@@ -9,6 +9,7 @@
 # ODBCINI, HOME).
 
 %modern
+%prepend-module-path "${SCRIPT_DIR}/../build"
 %requires odbc
 %requires json
 

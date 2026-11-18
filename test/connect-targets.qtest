@@ -13,6 +13,7 @@
 # manager cannot load the driver.
 
 %modern
+%prepend-module-path "${SCRIPT_DIR}/../build"
 %requires QUnit
 %requires FsUtil
 %requires json
