@@ -269,7 +269,7 @@ try {
 - [Qore Programming Language](http://qore.org)
 - [GitHub Repository](https://github.com/qorelanguage/module-odbc)
 - [unixODBC Project](http://www.unixodbc.org)
-- [API Documentation](https://qorelanguage.github.io/module-odbc)
+- [ODBC module guide (Doxygen source)](docs/mainpage.dox.tmpl)
 
 ## License
 

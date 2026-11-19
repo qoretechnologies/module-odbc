@@ -143,7 +143,7 @@ namespace Qore::odbc;
     @returns The hash returned by the function encodes the desired ODBC type for the bind and the value for binding in the \c "^odbct^" and \c "^value^" keys
 
     @par Example:
-    @code
+    @code{.py}
 # we use odbc_bind() to bind a SQL_DATE type by value, otherwise the ODBC module would try to send the date as SQL_TIMESTAMP instead which could change the date value depending on currently set timezone and timezone of the ODBC connection
 date d = 2016-1-14;
 db.exec("INSERT INTO table_abc (id, dt) VALUES (%v, %v)", 42, odbc_bind(ODBCT_DATE, d));
