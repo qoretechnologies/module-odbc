@@ -4,19 +4,11 @@
 import argparse
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 
+from ci_redact import redact
 
-def redact(text):
-    """Text to print: an exception in a child's output can hold the connection string."""
-    value = os.environ.get("QORE_DB_CONNSTR_ODBC")
-    if not value:
-        return text
-    text = text.replace(value, "<connection string>")
-    match = re.match(r"[^:]*:[^/]*/([^@]*)@", value)
-    return text.replace(match.group(1), "<masked>") if match and match.group(1) else text
 
 
 def main():
@@ -48,7 +40,8 @@ def main():
         expected = ["ODBC_BIND_TRACE injected column 1", "ODBC_BIND_TRACE bind column 1",
                     "ODBC_BIND_TRACE bind column 2"]
         if trace != expected:
-            raise AssertionError("Binding continued after the first failed NULL parameter: " + repr(trace))
+            raise AssertionError("Binding continued after the first failed NULL parameter: "
+                                 + redact(repr(trace)))
         print("Binding stops at the injected error and a fresh execution recovers")
 
 

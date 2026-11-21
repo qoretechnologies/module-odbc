@@ -23,7 +23,7 @@ DRIVER_EOF
 odbcinst -i -d -f /tmp/psqlodbc.ini
 
 # the test database
-. test/docker_test/postgres_lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/postgres_lib.sh"
 setup_odbc_database
 
 # setup MODULE_SRC_DIR env var
@@ -85,9 +85,18 @@ ${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/bui
 python3 test/native/run-connection-options.py "build/odbc-api-$(qore --latest-module-api).qmod"
 RESULTS="$RESULTS $?"
 
+# The runners below mask credentials in what they print.
+python3 -B -W error test/native/test_redact.py
+RESULTS="$RESULTS $?"
+
+# Exercise injected binding failures and driver faults against the test database.
+python3 -B -W error test/native/run-bind-failure.py "build/odbc-api-$(qore --latest-module-api).qmod"
+RESULTS="$RESULTS $?"
+python3 -B -W error test/native/run-driver-faults.py "build/odbc-api-$(qore --latest-module-api).qmod"
+RESULTS="$RESULTS $?"
+
 # Cleanup if using shared host
 if ! getent hosts postgres > /dev/null 2>&1; then
-    . test/docker_test/postgres_lib.sh
     cleanup_postgres_on_host
 fi
 

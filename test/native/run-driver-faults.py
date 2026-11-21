@@ -6,19 +6,11 @@ each scenario runs with a time limit, so that a hang fails instead of blocking t
 import argparse
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 
+from ci_redact import redact
 
-def redact(text):
-    """Text to print: an exception in a child's output can hold the connection string."""
-    value = os.environ.get("QORE_DB_CONNSTR_ODBC")
-    if not value:
-        return text
-    text = text.replace(value, "<connection string>")
-    match = re.match(r"[^:]*:[^/]*/([^@]*)@", value)
-    return text.replace(match.group(1), "<masked>") if match and match.group(1) else text
 
 
 def scenarios(disconnect_error):
@@ -69,7 +61,7 @@ def main():
             trace = [line for line in result.stderr.splitlines() if line.startswith("ODBC_FAULT_TRACE ")]
             counts = {line: trace.count(line) for line in expected}
             if counts != expected:
-                raise AssertionError(fault + ": unexpected driver calls: " + repr(trace))
+                raise AssertionError(fault + ": unexpected driver calls: " + redact(repr(trace)))
             print(fault + ": handled")
 
 

@@ -4,19 +4,11 @@
 import argparse
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 
+from ci_redact import redact
 
-def redact(text):
-    """Text to print: an exception in a child's output can hold the connection string."""
-    value = os.environ.get("QORE_DB_CONNSTR_ODBC")
-    if not value:
-        return text
-    text = text.replace(value, "<connection string>")
-    match = re.match(r"[^:]*:[^/]*/([^@]*)@", value)
-    return text.replace(match.group(1), "<masked>") if match and match.group(1) else text
 
 
 def main():
@@ -43,8 +35,9 @@ def main():
         expected = ['ATTRIBUTE 0'] * 2
         for _ in range(4):  # each timeout, once rejected and once coerced
             expected += ['ATTRIBUTE 60', 'CONNECT', 'ATTRIBUTE 0', 'ATTRIBUTE 1', 'ATTRIBUTE 4294967295']
-        trace = [line for line in result.stderr.splitlines() if line.startswith(('ATTRIBUTE ', 'CONNECT'))]
-        assert trace == expected, trace
+        trace = [line for line in result.stderr.splitlines()
+                 if line.startswith('ATTRIBUTE ') or line == 'CONNECT']
+        assert trace == expected, redact(str(trace))
         print(redact(result.stdout), end='')
         print('18 connection option fault cases passed')
 
