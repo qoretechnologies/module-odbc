@@ -676,10 +676,11 @@ class OdbcTest inherits QUnit::Test {
     }
 
     passwordRedactionTest() {
-        # This test verifies that the connection password is never leaked into the
-        # ODBC-CONNECTION-ERROR exception (the connection string embedded in the message must be
-        # sanitized). It does not require a working database: connecting with a bogus datasource
-        # fails at the driver-connect call, which is exactly where the leak occurred.
+        # This test verifies that the connection credentials are never leaked into the
+        # ODBC-CONNECTION-ERROR exception: the connection string is not shown, and the user name
+        # and password are masked in the driver's diagnostics (qore#6994; see also
+        # connection-secrets.qtest). It does not require a working database: connecting with a
+        # bogus datasource fails at the driver-connect call.
         #
         # Note: this test is intentionally independent of the QORE_DB_CONNSTR_ODBC environment
         # variable (i.e. it does not check the "no_odbc" flag) so that it runs even when no live
@@ -693,12 +694,11 @@ class OdbcTest inherits QUnit::Test {
             fail("expected ODBC-CONNECTION-ERROR was not thrown");
         } catch (hash<ExceptionInfo> ex) {
             assertEq("ODBC-CONNECTION-ERROR", ex.err);
-            # the plaintext password must NEVER appear anywhere in the exception
+            # neither the password nor the user name appear anywhere in the exception
             assertEq(-1, ex.desc.find(password), "password must not be leaked in the connection exception");
-            # the connection string is still reported (with the password masked) to aid debugging
-            assertTrue(ex.desc.find("<masked>") > -1, "password should be masked in the connection exception");
-            # non-secret connection details (the username) must still be present for diagnostics
-            assertTrue(ex.desc.find(username) > -1, "username should be present in the connection exception");
+            assertEq(-1, ex.desc.find(username), "user name must not be leaked in the connection exception");
+            # the problem and the driver manager's SQLSTATE are still reported
+            assertRegex("^could not connect to the datasource; \\[[0-9A-Z]{5}\\]", ex.desc);
         }
     }
 

@@ -268,6 +268,9 @@ private:
     //! Connection string.
     QoreString connStr;
 
+    //! The connection values that are masked in diagnostics: user name, password, DSN or database, other secrets
+    std::vector<std::string> secrets;
+
     //! Whether an ODBC connection has been opened.
     bool connected = false;
 
@@ -369,6 +372,9 @@ private:
         @param xsink exception sink
      */
     DLLLOCAL void handleDbcError(const char* err, const char* desc, ExceptionSink* xsink);
+
+    //! Collects the connection values that are masked in the diagnostics of the connection
+    DLLLOCAL void collectSecrets();
 
     //! Throw a CONNECTION-DEAD-ERROR exception via xsink.
     DLLLOCAL void deadConnectionError(ExceptionSink* xsink);

@@ -42,6 +42,7 @@
 #include "qore/DBI.h"
 
 #include "ODBCCancelHelper.h"
+#include "ODBCConnectionString.h"
 #include "ODBCErrorHelper.h"
 #include "ODBCStatement.h"
 
@@ -74,6 +75,7 @@ ODBCConnection::ODBCConnection(Datasource* d, ExceptionSink* xsink) : ds(d), con
     if (prepareConnectionString(ds, connStr, xsink)) {
         return;
     }
+    collectSecrets();
 
     // Connect.
     if (connect(xsink)) {
@@ -96,73 +98,37 @@ ODBCConnection::~ODBCConnection() {
     }
 }
 
-//! Returns a copy of an ODBC connection string with the values of any password keys redacted.
-/** This is used to ensure that credentials (the connection password) are never leaked into
-    exception messages or logs. The values of the \c PWD and \c PASSWORD keys (case-insensitive)
-    are replaced with a fixed placeholder, regardless of how they entered the connection string
-    (explicit datasource password, a raw connection string in the DB name, or connection options).
-
-    @param cstr the connection string to sanitize
-    @return the connection string with all password values masked
- */
-static QoreString getSafeConnStr(const QoreString& cstr) {
-    static const char* MASK = "<masked>";
-    QoreString safe(QCS_UTF8);
-    const char* p = cstr.c_str();
-    while (*p) {
-        const char* start = p;
-        // Find the end of the key (either '=' or ';' or end of string).
-        const char* eq = p;
-        while (*eq && *eq != '=' && *eq != ';') {
-            ++eq;
-        }
-        if (*eq != '=') {
-            // No "key=value" pair in this segment; copy it verbatim (including any trailing ';').
-            while (*p && *p != ';') {
-                safe.concat(*p++);
+void ODBCConnection::collectSecrets() {
+    secrets.clear();
+    if (const char* user = ds->getUsername()) {
+        odbc_connstr::add_secret(user, secrets);
+    }
+    if (const char* pass = ds->getPassword()) {
+        odbc_connstr::add_secret(pass, secrets);
+    }
+    const std::string& db = ds->getDBNameStr();
+    if (db.find('=') == std::string::npos) {
+        odbc_connstr::add_secret(db, secrets);
+    }
+    // the secret values of the whole connection string: from a connection string in the database name, the "conn"
+    // option and the other options
+    odbc_connstr::add_secrets(connStr.c_str(), secrets);
+#ifdef HAVE_ODBCINST
+    // and those of its DSN, which the driver uses where the connection string does not give them
+    {
+        std::vector<odbc_connstr::keyval_t> kv;
+        std::string err;
+        if (odbc_connstr::parse_connection_string(connStr.c_str(), kv, err)) {
+            for (const odbc_connstr::keyval_t& p : kv) {
+                if (p.first == "DSN") {
+                    qore_odbc_targets::add_dsn_secrets(p.second, secrets);
+                    break;
+                }
             }
-            if (*p == ';') {
-                safe.concat(*p++);
-            }
-            continue;
-        }
-
-        // Extract the (trimmed, upper-cased) key to check whether it holds a password.
-        QoreString key(start, eq - start, QCS_UTF8);
-        key.trim();
-        key.toupr();
-        bool redact = key.equal("PWD") || key.equal("PASSWORD");
-
-        // Determine the extent of the value, respecting brace-quoted values (e.g. "{...}").
-        const char* v = eq + 1;
-        const char* vend = v;
-        if (*v == '{') {
-            ++vend;
-            while (*vend && *vend != '}') {
-                ++vend;
-            }
-            if (*vend == '}') {
-                ++vend;
-            }
-        } else {
-            while (*vend && *vend != ';') {
-                ++vend;
-            }
-        }
-
-        // Copy "key=" verbatim, then either the masked placeholder or the original value.
-        safe.concat(start, (eq - start) + 1);
-        if (redact) {
-            safe.concat(MASK);
-        } else {
-            safe.concat(v, vend - v);
-        }
-        p = vend;
-        if (*p == ';') {
-            safe.concat(*p++);
         }
     }
-    return safe;
+#endif
+    odbc_connstr::finish_secrets(secrets);
 }
 
 int ODBCConnection::connect(ExceptionSink* xsink) {
@@ -187,8 +153,8 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
         SQLRETURN rc = SQLSetConnectAttr(dbc, attr, reinterpret_cast<SQLPOINTER>(static_cast<uintptr_t>(value)),
             SQL_IS_UINTEGER);
         if (required && rc != SQL_SUCCESS) {
-            ODBCErrorHelper::raiseException(xsink, "ODBC-CONNECTION-OPTION-ERROR", SQL_HANDLE_DBC, dbc,
-                "could not set connection option '%s' to %u", name, value);
+            ODBCErrorHelper::raiseRedactedException(xsink, "ODBC-CONNECTION-OPTION-ERROR", SQL_HANDLE_DBC, dbc,
+                secrets, "could not set connection option '%s' to %u", name, value);
             return false;
         }
         return true;
@@ -230,11 +196,30 @@ int ODBCConnection::connect(ExceptionSink* xsink) {
         return -1;
     }
     if (!SQL_SUCCEEDED(ret)) { // error
-        // NOTE: the connection string is sanitized to ensure that the password is never leaked
-        // into the exception message
-        QoreString safeConnStr(getSafeConnStr(connStr));
-        ODBCErrorHelper::raiseException(xsink, "ODBC-CONNECTION-ERROR", SQL_HANDLE_DBC, dbc,
-            "could not connect to the datasource; connection string: '%s'", safeConnStr.c_str());
+        // the connection string is not shown, as it holds the DSN or database, the user name, the password and
+        // possibly other secrets; only the ODBC driver is named, and the connection values are masked in the
+        // diagnostics of the driver and server (qore#6994)
+        std::string driver;
+        {
+            std::vector<odbc_connstr::keyval_t> kv;
+            std::string err;
+            if (odbc_connstr::parse_connection_string(connStr.c_str(), kv, err)) {
+                for (const odbc_connstr::keyval_t& p : kv) {
+                    if (p.first == "DRIVER") {
+                        driver = p.second;
+                        break;
+                    }
+                }
+            }
+        }
+        odbc_connstr::redact(driver, secrets);
+        if (driver.empty()) {
+            ODBCErrorHelper::raiseRedactedException(xsink, "ODBC-CONNECTION-ERROR", SQL_HANDLE_DBC, dbc, secrets,
+                "could not connect to the datasource");
+        } else {
+            ODBCErrorHelper::raiseRedactedException(xsink, "ODBC-CONNECTION-ERROR", SQL_HANDLE_DBC, dbc, secrets,
+                "could not connect to the datasource with the ODBC driver '%s'", driver.c_str());
+        }
         return -1;
     }
     return 0;
@@ -790,27 +775,41 @@ int ODBCConnection::setConnectionTimeoutOption(QoreValue val, ExceptionSink* xsi
     return parse_timeout_option(val, OPT_CONN_TIMEOUT, options.connTimeout, xsink);
 }
 
+//! appends <tt>key=value;</tt> to the connection string, with the value in braces if needed
+static void append_value(QoreString& connStr, const char* key, const std::string& value) {
+    connStr.concat(key);
+    connStr.concat('=');
+    std::string v = odbc_connstr::quote_value(value);
+    connStr.concat(v.c_str(), v.size());
+    connStr.concat(';');
+}
+
 int ODBCConnection::prepareConnectionString(Datasource* ds, QoreString& connStr, ExceptionSink* xsink) {
     {
         const std::string& db = ds->getDBNameStr();
         if (!db.empty()) {
             if (db.find('=') != std::string::npos) {
+                // a connection string, used as it is
                 connStr.set(db);
                 if (db.back() != ';') {
                     connStr.concat(';');
                 }
             } else {
-                connStr.sprintf("DSN=%s;", db.c_str());
+                append_value(connStr, "DSN", db);
             }
         }
     }
 
-    if (ds->getUsername()) {
-        connStr.sprintf("USER=%s;UID=%s;", ds->getUsername(), ds->getUsername());
+    // values with ';', '{' or '}' are written in braces: written as they are, they would be cut, and the rest
+    // would be read as other keys
+    if (const char* user = ds->getUsername()) {
+        append_value(connStr, "USER", user);
+        append_value(connStr, "UID", user);
     }
 
-    if (ds->getPassword()) {
-        connStr.sprintf("PASSWORD=%s;PWD=%s;", ds->getPassword(), ds->getPassword());
+    if (const char* pass = ds->getPassword()) {
+        append_value(connStr, "PASSWORD", pass);
+        append_value(connStr, "PWD", pass);
     }
 
     ConstHashIterator hi(ds->getConnectOptions());
@@ -965,7 +964,7 @@ void ODBCConnection::handleDbcError(const char* err, const char* desc, Exception
     if (!xsink) {
         return;
     }
-    ODBCErrorHelper::raiseException(xsink, err, SQL_HANDLE_DBC, dbc, "%s", desc);
+    ODBCErrorHelper::raiseRedactedException(xsink, err, SQL_HANDLE_DBC, dbc, secrets, "%s", desc);
 }
 
 void ODBCConnection::deadConnectionError(ExceptionSink* xsink) {
