@@ -52,6 +52,8 @@
 
 #include <odbcinst.h>
 
+#include "ODBCConnectionString.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -61,93 +63,16 @@
 
 namespace qore_odbc_targets {
 
-//! a key of a connection string, upper-cased, and its value without braces
-typedef std::pair<std::string, std::string> keyval_t;
-
-static inline std::string upper(std::string s) {
-    for (char& c : s) {
-        c = toupper(static_cast<unsigned char>(c));
-    }
-    return s;
-}
+using odbc_connstr::keyval_t;
+using odbc_connstr::upper;
+using odbc_connstr::trim;
+using odbc_connstr::parse_connection_string;
 
 static inline std::string lower(std::string s) {
     for (char& c : s) {
         c = tolower(static_cast<unsigned char>(c));
     }
     return s;
-}
-
-static inline std::string trim(const std::string& s) {
-    size_t b = s.find_first_not_of(" \t");
-    if (b == std::string::npos) {
-        return std::string();
-    }
-    return s.substr(b, s.find_last_not_of(" \t") - b + 1);
-}
-
-//! parses a connection string: <tt>key=value;...</tt>, a value in braces can contain ';' (and "}}" for '}')
-static inline bool parse_connection_string(const std::string& s, std::vector<keyval_t>& kv, std::string& err) {
-    size_t i = 0;
-    while (i < s.size()) {
-        size_t eq = s.find('=', i);
-        size_t semi = s.find(';', i);
-        if (eq == std::string::npos || (semi != std::string::npos && semi < eq)) {
-            // an empty element, or one without a value
-            if (!trim(s.substr(i, semi == std::string::npos ? std::string::npos : semi - i)).empty()) {
-                err = "the connection string has an element without '='";
-                return false;
-            }
-            if (semi == std::string::npos) {
-                break;
-            }
-            i = semi + 1;
-            continue;
-        }
-        std::string key = upper(trim(s.substr(i, eq - i)));
-        i = eq + 1;
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) {
-            ++i;
-        }
-        std::string value;
-        if (i < s.size() && s[i] == '{') {
-            ++i;
-            bool closed = false;
-            while (i < s.size()) {
-                if (s[i] == '}') {
-                    if (i + 1 < s.size() && s[i + 1] == '}') {
-                        value += '}';
-                        i += 2;
-                        continue;
-                    }
-                    ++i;
-                    closed = true;
-                    break;
-                }
-                value += s[i++];
-            }
-            if (!closed) {
-                err = "a value in braces is not closed in the connection string";
-                return false;
-            }
-            while (i < s.size() && s[i] != ';') {
-                if (!isspace(static_cast<unsigned char>(s[i]))) {
-                    err = "unexpected text after a value in braces in the connection string";
-                    return false;
-                }
-                ++i;
-            }
-        } else {
-            size_t e = s.find(';', i);
-            value = trim(s.substr(i, e == std::string::npos ? std::string::npos : e - i));
-            i = e == std::string::npos ? s.size() : e;
-        }
-        if (i < s.size() && s[i] == ';') {
-            ++i;
-        }
-        kv.emplace_back(key, value);
-    }
-    return true;
 }
 
 //! returns the value of the first occurrence of the key, as the driver uses it
@@ -287,7 +212,8 @@ static inline bool get_target(const std::string& conn_str, ConnectionKeys& ck, D
         ck.dsn = *dsn;
         // the DSN must exist: it has a Driver entry
         if (profile_value(ck.dsn, "Driver", "odbc.ini").empty()) {
-            err = "the ODBC DSN '" + ck.dsn + "' is not defined";
+            // the DSN is not shown, as it identifies the connection
+            err = "the ODBC DSN of the connection is not defined";
             return false;
         }
     }
@@ -344,16 +270,7 @@ static inline bool get_target(const std::string& conn_str, ConnectionKeys& ck, D
 //! a key is the one that the driver uses)
 static inline std::string pin_keys(const ConnectionKeys& ck, DriverKind kind, const Target& t,
         const std::string& addr) {
-    auto brace = [](const std::string& v) {
-        std::string rv = "{";
-        for (char c : v) {
-            rv += c;
-            if (c == '}') {
-                rv += '}';
-            }
-        }
-        return rv + "}";
-    };
+    using odbc_connstr::brace;
     switch (kind) {
         case DK_POSTGRESQL:
             // libpq connects to hostaddr and keeps the host name for TLS

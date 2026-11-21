@@ -47,6 +47,20 @@ Datasource db(SQL::DSODBC, user, pass, dsn, "UTF8");
     If a database name is provided in the datasource connection arguments, it is added as the \c DSN option in the
     ODBC connection string.
 
+    A DSN, user name or password with a \c ";", \c "{" or \c "}" character, or with leading or trailing white space,
+    is added in braces, with any \c "}" doubled, as the ODBC connection string syntax requires, so that the driver
+    gets the whole value; other values are added as they are, as some drivers remove the braces only from some keys
+    (psqlODBC, for example, only from the password).  A connection string given as the database name or the
+    \c conn option is used as it is: its values with these characters must be written in braces.
+
+    @anchor odbc_connection_secrets
+    The exceptions of a connection never show its connection string: a connection error names the problem and the
+    ODBC driver (if the connection string gives one), followed by the diagnostics of the driver and server with their
+    SQLSTATE, in which the user name, the password, the DSN or database, and the values of other secret keys (any key
+    whose name contains \c USER, \c DATABASE, \c CATALOG, \c PASSWORD, \c PWD, \c TOKEN, \c SECRET, \c KEY or
+    \c CREDENTIAL, as well as \c UID, \c DB, \c DBNAME, \c DSN, \c FILEDSN and \c SAVEFILE) are masked as
+    \c ****.  If a connection string cannot be parsed, all of its values are masked.
+
     The driver supports transactions, bound parameters, and prepared statements.
     See @ref odbccapabilitiesguide for supported features and their requirements.
 

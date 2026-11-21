@@ -22,6 +22,16 @@
       including dense buffers for integer, floating-point, and safe numeric/decimal columns
 
     @subsection odbcv2_fixes Bug Fixes
+    - <b>Security</b>: connection errors showed the connection string with only the values of the password keys
+      masked, so the DSN or database and the user name were shown, other secret keys were not masked, and part of a
+      password with a \c ";" could still be shown; the connection string is no longer shown, and the user name,
+      password, DSN or database and other secret values are masked in the diagnostics of the driver and server,
+      which can name them (see @ref odbc_connection_secrets)
+      (<a href="https://github.com/qoretechnologies/qore/issues/6994">qore#6994</a>)
+    - added a DSN, user name or password with a \c ";", \c "{" or \c "}" character to the connection string
+      without braces, so that the driver got only part of the value (a password with a \c ";" could not log in) and
+      the rest was read as other keys; such values are now written in braces
+      (<a href="https://github.com/qoretechnologies/qore/issues/6994">qore#6994</a>)
     - did not add the \c "preserve-case" option to the ODBC connection string, as it is an option of this driver
       and not of the ODBC driver; with \c NULL as its value, the connection could not be opened
     - bound a \c NULL or \c NOTHING argument, or a missing argument, for a \c %v placeholder as \c NULL; the

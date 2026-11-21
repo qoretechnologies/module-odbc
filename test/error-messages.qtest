@@ -23,6 +23,8 @@ class ErrorMessagesTest inherits QUnit::Test {
         *Datasource ds;
         # an object name with format directives
         const Name = "no_such_%s_%d_%x_%s";
+        # a port with format directives, short enough for the driver's port field (psqlODBC keeps 9 characters)
+        const PortName = "%s%d%x";
     }
 
     constructor() : QUnit::Test("ODBC error messages", "1.0", \ARGV) {
@@ -90,10 +92,14 @@ class ErrorMessagesTest inherits QUnit::Test {
     }
 
     connectionError() {
-        # the same connection to a database that does not exist
-        string bad = regex_subst(connstr, "Database=[^;}]*", "Database=" + Name, RE_Caseless);
+        # the same connection with a port that is not a number: the driver's message shows the value; the database
+        # name is not used, as it is masked in connection errors (qore#6994)
+        string bad = regex_subst(connstr, "(^|[;{])Port=[^;}]*", "$1Port=" + PortName, RE_Caseless);
         if (bad == connstr) {
-            testSkip("the connection string has no Database keyword");
+            bad = regex_subst(connstr, "(conn=[^}]*)", "$1;Port=" + PortName, RE_Caseless);
+        }
+        if (bad == connstr) {
+            testSkip("the connection string has no conn option");
         }
         hash<ExceptionInfo> ex;
         try {
@@ -103,7 +109,6 @@ class ErrorMessagesTest inherits QUnit::Test {
             ex = e;
         }
         assertEq("ODBC-CONNECTION-ERROR", ex.err);
-        # in the connection string and in the server's message
-        assertGe(2, occurrences(ex.desc, Name), ex.desc);
-    }
+        # in the driver's message
+        assertGe(1, occurrences(ex.desc, PortName), ex.desc);    }
 }

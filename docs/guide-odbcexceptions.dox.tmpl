@@ -14,7 +14,7 @@
     @section odbc_connection_errors Connection Errors
 
     |!Exception|!Description|!Common Causes|!Resolution
-    |\c ODBC-CONNECTION-ERROR|Connection to the database failed|Invalid credentials, server unavailable, network issues, incorrect connection string|Verify connection string, credentials, network connectivity, and that the database server is running
+    |\c ODBC-CONNECTION-ERROR|Connection to the database failed; the description names the ODBC driver, if the connection string gives one, followed by the diagnostics of the driver and server with their SQLSTATE; the connection string is not shown, and the user name, password, DSN or database and other secret values of the connection are masked as \c **** in the diagnostics (see @ref odbc_connection_secrets)|Invalid credentials, server unavailable, network issues, incorrect connection string|Verify connection string, credentials, network connectivity, and that the database server is running
     |\c ODBC-CONNECTION-HANDLE-ERROR|Cannot allocate a connection handle|Resource exhaustion, ODBC driver issues|Check ODBC driver configuration, restart application
     |\c ODBC-CONNECTION-DEAD-ERROR|The database connection has been lost|Network failure, server restart, idle timeout|Reconnect to the database; consider using connection pooling with health checks
     |\c ODBC-DISCONNECT-ERROR|The driver could not disconnect a connection being closed; the connection is closed nevertheless (when built with %Qore 3.0 or later: see @ref Qore::odbc::ODBC_HAVE_DISCONNECT_ERROR "ODBC_HAVE_DISCONNECT_ERROR")|A statement or transaction the driver cannot end, a driver or network failure|Check the driver's diagnostics in the description; the datasource can be opened again

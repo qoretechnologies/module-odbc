@@ -30,11 +30,14 @@
 
 #include <cstdarg>
 #include <string>
+#include <vector>
 
 #include <sql.h>
 #include <sqlext.h>
 
 #include "qore/Qore.h"
+
+#include "ODBCConnectionString.h"
 
 namespace odbc {
 
@@ -64,6 +67,16 @@ public:
             s += "] (native ";
             s += std::to_string(native);
             s += "): ";
+            // a longer message is read whole, so that no value in it is cut (and could not be masked whole)
+            if (len >= (SQLSMALLINT)sizeof(text) && len < 32767) {
+                std::vector<SQLCHAR> buf(static_cast<size_t>(len) + 1);
+                SQLSMALLINT len2;
+                if (SQL_SUCCEEDED(SQLGetDiagRecA(handleType, handle, i, state, &native, buf.data(),
+                        static_cast<SQLSMALLINT>(buf.size()), &len2))) {
+                    s += reinterpret_cast<char*>(buf.data());
+                    continue;
+                }
+            }
             s += reinterpret_cast<char*>(text);
         }
     }
@@ -96,6 +109,42 @@ public:
         }
         std::string diag;
         extractDiag(handleType, handle, diag);
+        desc->concat(diag.c_str());
+        xsink->raiseException(err, desc.release());
+    }
+
+    //! Raises an exception like raiseException(), with the given connection values masked in the diagnostics
+    /** Driver and server diagnostics of a connection can name its user, database or DSN (for example "password
+        authentication failed for user ..."), so every occurrence of the values is replaced with
+        odbc_connstr::MASK; the SQLSTATE and the rest of each record are kept. The description given with \a fmt
+        is not changed: it must not contain any connection value.
+
+        @param xsink exception sink
+        @param err exception code
+        @param handleType type of the ODBC handle
+        @param handle ODBC handle
+        @param secrets the values to mask, sorted by odbc_connstr::finish_secrets()
+        @param fmt format string for the description
+     */
+    DLLLOCAL static void raiseRedactedException(ExceptionSink* xsink, const char* err, SQLSMALLINT handleType,
+            SQLHANDLE handle, const std::vector<std::string>& secrets, const char* fmt, ...)
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 6, 7)))
+#endif
+    {
+        QoreStringNodeHolder desc(new QoreStringNode);
+        while (true) {
+            va_list args;
+            va_start(args, fmt);
+            int rc = desc->vsprintf(fmt, args);
+            va_end(args);
+            if (!rc) {
+                break;
+            }
+        }
+        std::string diag;
+        extractDiag(handleType, handle, diag);
+        odbc_connstr::redact(diag, secrets);
         desc->concat(diag.c_str());
         xsink->raiseException(err, desc.release());
     }
