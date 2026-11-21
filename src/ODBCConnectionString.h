@@ -203,6 +203,25 @@ static inline void add_secret(const std::string& v, std::vector<std::string>& se
     }
 }
 
+//! adds the value of a secret key to \a secrets
+/** The value of \c PQOPT is a list of libpq options (<tt>key=value ...</tt>), whose parts libpq can show on their
+    own, so each of them is added too.
+*/
+static inline void add_key_secret(const std::string& key, const std::string& v, std::vector<std::string>& secrets) {
+    add_secret(v, secrets);
+    if (key == "PQOPT") {
+        size_t b = 0;
+        while (b < v.size()) {
+            size_t n = v.find_first_of(" \t='", b);
+            add_secret(v.substr(b, n == std::string::npos ? std::string::npos : n - b), secrets);
+            if (n == std::string::npos) {
+                break;
+            }
+            b = n + 1;
+        }
+    }
+}
+
 //! adds the secret values of a connection string to \a secrets
 /** If the string cannot be parsed, every value and every element without a key is added, as it is not known how
     the driver splits it.
@@ -213,7 +232,7 @@ static inline void add_secrets(const std::string& cs, std::vector<std::string>& 
     if (parse_connection_string(cs, kv, err)) {
         for (const keyval_t& p : kv) {
             if (is_secret_key(p.first)) {
-                add_secret(p.second, secrets);
+                add_key_secret(p.first, p.second, secrets);
             }
         }
         return;

@@ -48,6 +48,7 @@ public:
     /** @param handleType type of the ODBC handle
         @param handle ODBC handle
         @param s string where the output will be written to
+        @param secrets if given, the values masked in the message of each record (not in its SQLSTATE or native code)
      */
     DLLLOCAL static void extractDiag(SQLSMALLINT handleType, SQLHANDLE& handle, std::string& s,
             const std::vector<std::string>* secrets = nullptr) {

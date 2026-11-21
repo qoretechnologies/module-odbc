@@ -104,21 +104,41 @@ static inline void add_dsn_secrets(const std::string& dsn, std::vector<std::stri
     if (dsn.empty()) {
         return;
     }
-    // the names of the keys of the section, each terminated by a NUL character, the list by a second one
-    std::vector<char> keys(8192);
 #pragma push_macro("SQLGetPrivateProfileString")
 #undef SQLGetPrivateProfileString
-    int len = SQLGetPrivateProfileString(dsn.c_str(), nullptr, "", keys.data(), static_cast<int>(keys.size()),
-        "odbc.ini");
+    // reads into a buffer that is enlarged until the result fits (the driver manager returns only what fits)
+    auto read = [&dsn](const char* key, std::vector<char>& buf) -> int {
+        for (size_t size = 8192; size <= 1024 * 1024; size *= 4) {
+            buf.assign(size, '\0');
+            int len = SQLGetPrivateProfileString(dsn.c_str(), key, "", buf.data(), static_cast<int>(size),
+                "odbc.ini");
+            if (len <= 0) {
+                return 0;
+            }
+            if (static_cast<size_t>(len) < size - 2) {
+                return len;
+            }
+        }
+        return static_cast<int>(buf.size() - 2);
+    };
 #pragma pop_macro("SQLGetPrivateProfileString")
+    // the names of the keys of the section, each terminated by a NUL character, the list by a second one
+    std::vector<char> keys;
+    int len = read(nullptr, keys);
     if (len <= 0) {
         return;
     }
     keys[std::min<size_t>(len, keys.size() - 1)] = '\0';
     keys.back() = '\0';
+    std::vector<char> value;
     for (const char* k = keys.data(); k < keys.data() + len && *k; k += strlen(k) + 1) {
-        if (odbc_connstr::is_secret_key(upper(trim(k)))) {
-            odbc_connstr::add_secret(profile_value(dsn, k, "odbc.ini"), secrets);
+        std::string key = upper(trim(k));
+        if (odbc_connstr::is_secret_key(key)) {
+            int vlen = read(k, value);
+            if (vlen > 0) {
+                odbc_connstr::add_key_secret(key, std::string(value.data(), std::min<size_t>(vlen,
+                    strnlen(value.data(), value.size()))), secrets);
+            }
         }
     }
 }

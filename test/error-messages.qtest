@@ -96,7 +96,6 @@ class ErrorMessagesTest inherits QUnit::Test {
         # name is not used, as it is masked in connection errors (qore#6994)
         string bad = regex_subst(connstr, "(^|;|\\{|conn=)Port=[^;}]*", "$1Port=" + PortName, RE_Caseless);
         if (bad == connstr) {
-            # the first key is the one the driver uses
             bad = regex_subst(connstr, "conn=", "conn=Port=" + PortName + ";", RE_Caseless);
         }
         if (bad == connstr) {
