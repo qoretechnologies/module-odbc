@@ -107,7 +107,18 @@ case "$*" in
         : > "${STUB_DIR}/args-leak"
         exit 99 ;;
     *"select 1"*|*"SELECT 1"*) ;;
-    *) cat > /dev/null ;;
+    *)
+        # a statement with a password must run with VERBOSITY=sqlstate: psql would print it in an error
+        sql=$(cat)
+        case "$sql" in
+            *password*)
+                case "$*" in
+                    *VERBOSITY=sqlstate*) ;;
+                    *)
+                        : > "${STUB_DIR}/verbosity-lost"
+                        exit 98 ;;
+                esac ;;
+        esac ;;
 esac
 exit 0
 STUB
@@ -136,6 +147,9 @@ check_output() {
     elif [ -e "$work/args-leak" ]; then
         echo "FAIL: $1: the value is on a command line"
         fail=1
+    elif [ -e "$work/verbosity-lost" ]; then
+        echo "FAIL: $1: a statement with a password ran without VERBOSITY=sqlstate"
+        fail=1
     elif [ -e "$work/executed" ]; then
         echo "FAIL: $1: the value was executed"
         fail=1
@@ -157,7 +171,7 @@ check_output() {
 check_setup() {
     local out rc
     : > "$work/setup-env.sh"
-    rm -f "$work/executed" "$work/args-leak"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost"
     printf '%s' "$5" > "$work/setup-expected"
     out=$(run_lib "$1" "${6:-}" "$5" "
         set -e
@@ -177,7 +191,7 @@ check_direct() {
     if [ "$5" = on ]; then
         start="set -x"
     fi
-    rm -f "$work/executed" "$work/args-leak"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost"
     out=$(run_lib "$1" "$3" "$sentinel" "
         $start
         $2
@@ -192,7 +206,7 @@ check_direct() {
 check_odbc() {
     local out rc
     : > "$work/setup-env.sh"
-    rm -f "$work/executed" "$work/args-leak"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost"
     out=$(STUB_GETENT="$2" run_lib "$1" "" "$sentinel" "
         set -e
         set -x
@@ -225,6 +239,30 @@ check_code() {
     fi
 }
 
+# check_codes_guard <shell> <tracing: on or off>: pg_error_codes does not trace its work and keeps the caller's state
+check_codes_guard() {
+    local out start=
+    if [ "$2" = on ]; then
+        start="set -x"
+    fi
+    out=$("$1" -c ". \"$here/postgres_lib.sh\"
+        $start
+        pg_error_codes 'PARSE-ERROR: text' none
+        { case \$- in *x*) echo tracing-on ;; *) echo tracing-off ;; esac; } 2>/dev/null" 2>&1)
+    if printf '%s\n' "$out" | grep -q -E '^\++ *(local code|code=|sed |printf |head )'; then
+        echo "FAIL: $1: pg_error_codes is traced"
+        fail=1
+    elif ! printf '%s\n' "$out" | grep -q "tracing-$2"; then
+        echo "FAIL: $1: pg_error_codes did not keep tracing $2"
+        fail=1
+    elif ! printf '%s\n' "$out" | grep -q '^PARSE-ERROR$'; then
+        echo "FAIL: $1: pg_error_codes did not report the code"
+        fail=1
+    else
+        echo "ok: $1: pg_error_codes is not traced, tracing stays $2"
+    fi
+}
+
 newline_value="first line
 $sentinel
 last line"
@@ -250,6 +288,8 @@ for shell in bash sh; do
         check_direct $shell pg_read_map_password map 3 $trace
     done
 
+    check_codes_guard $shell on
+    check_codes_guard $shell off
     check_odbc $shell ok
     check_odbc $shell fail
     check_code $shell DATASOURCE-PARSE-ERROR "x
