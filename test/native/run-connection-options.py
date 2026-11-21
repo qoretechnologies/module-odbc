@@ -4,8 +4,19 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
+
+
+def redact(text):
+    """Text to print: an exception in a child's output can hold the connection string."""
+    value = os.environ.get("QORE_DB_CONNSTR_ODBC")
+    if not value:
+        return text
+    text = text.replace(value, "<connection string>")
+    match = re.match(r"[^:]*:[^/]*/([^@]*)@", value)
+    return text.replace(match.group(1), "<masked>") if match and match.group(1) else text
 
 
 def main():
@@ -27,14 +38,14 @@ def main():
         result = subprocess.run(command, env=dict(os.environ, LD_PRELOAD=str(library)),
                                 capture_output=True, text=True, timeout=240)
         if result.returncode:
-            raise AssertionError(result.stdout + result.stderr)
+            raise AssertionError(redact(result.stdout + result.stderr))
         # Autocommit is always mandatory; only unconfigured timeout defaults may reach connect.
         expected = ['ATTRIBUTE 0'] * 2
         for _ in range(4):  # each timeout, once rejected and once coerced
             expected += ['ATTRIBUTE 60', 'CONNECT', 'ATTRIBUTE 0', 'ATTRIBUTE 1', 'ATTRIBUTE 4294967295']
         trace = [line for line in result.stderr.splitlines() if line.startswith(('ATTRIBUTE ', 'CONNECT'))]
         assert trace == expected, trace
-        print(result.stdout, end='')
+        print(redact(result.stdout), end='')
         print('18 connection option fault cases passed')
 
 

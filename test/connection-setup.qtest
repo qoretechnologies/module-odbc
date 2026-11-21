@@ -58,7 +58,7 @@ sub run(Queue done, hash<auto> cfg) {
         *Socket peer = server.accept(5s);
         if (!peer) {
             hash<auto> result = done.get(1s);
-            fail(sprintf("driver did not contact the fixture: %y", result));
+            fail(sprintf("driver did not contact the fixture: %y", result.err));
         }
         on_exit {
             peer.shutdown();

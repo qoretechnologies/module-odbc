@@ -408,7 +408,7 @@ class OdbcTest inherits QUnit::Test {
         try {
             initDatasource(connStr);
         } catch (hash<ExceptionInfo> ex) {
-            printf("Exception happened in datasource initialization:\n%s: %s\n", ex.err, ex.desc);
+            printf("Exception happened in datasource initialization:\n%s\n", ex.err);
             exit(1);
         }
 

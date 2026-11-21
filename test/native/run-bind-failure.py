@@ -4,8 +4,19 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
+
+
+def redact(text):
+    """Text to print: an exception in a child's output can hold the connection string."""
+    value = os.environ.get("QORE_DB_CONNSTR_ODBC")
+    if not value:
+        return text
+    text = text.replace(value, "<connection string>")
+    match = re.match(r"[^:]*:[^/]*/([^@]*)@", value)
+    return text.replace(match.group(1), "<masked>") if match and match.group(1) else text
 
 
 def main():
@@ -30,8 +41,8 @@ def main():
         result = subprocess.run(["qore", "-b", "--enable-debug", "-l", str(module),
                                  str(root / "bind-failure.qtest"), "-v"],
                                 env=env, capture_output=True, text=True, timeout=60)
-        print(result.stdout, end="")
-        print(result.stderr, end="")
+        print(redact(result.stdout), end="")
+        print(redact(result.stderr), end="")
         result.check_returncode()
         trace = [line for line in result.stderr.splitlines() if line.startswith("ODBC_BIND_TRACE ")]
         expected = ["ODBC_BIND_TRACE injected column 1", "ODBC_BIND_TRACE bind column 1",

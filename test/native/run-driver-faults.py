@@ -6,8 +6,19 @@ each scenario runs with a time limit, so that a hang fails instead of blocking t
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
+
+
+def redact(text):
+    """Text to print: an exception in a child's output can hold the connection string."""
+    value = os.environ.get("QORE_DB_CONNSTR_ODBC")
+    if not value:
+        return text
+    text = text.replace(value, "<connection string>")
+    match = re.match(r"[^:]*:[^/]*/([^@]*)@", value)
+    return text.replace(match.group(1), "<masked>") if match and match.group(1) else text
 
 
 def scenarios(disconnect_error):
@@ -50,10 +61,10 @@ def main():
                                          str(root / "driver-faults.qtest"), "-v"],
                                         env=env, capture_output=True, text=True, timeout=60)
             except subprocess.TimeoutExpired as e:
-                print(e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or ""), end="")
+                print(redact(e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")), end="")
                 raise AssertionError(fault + ": the test did not end within 60 seconds")
-            print(result.stdout, end="")
-            print(result.stderr, end="")
+            print(redact(result.stdout), end="")
+            print(redact(result.stderr), end="")
             result.check_returncode()
             trace = [line for line in result.stderr.splitlines() if line.startswith("ODBC_FAULT_TRACE ")]
             counts = {line: trace.count(line) for line in expected}

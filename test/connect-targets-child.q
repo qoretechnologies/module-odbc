@@ -2,7 +2,7 @@
 # -*- mode: qore; indent-tabs-mode: nil -*-
 # Copyright (C) 2026 Qore Technologies, s.r.o.
 #
-# Child process of connect-targets.qtest: opens each datasource given (a JSON list of hashes with "db"),
+# Child process of connect-targets.qtest: opens each datasource in the file given (a JSON list of hashes with "db"),
 # from a sandboxed Program whose network policy allows everything but DeniedAddress, and prints a
 # JSON list with the result of each: {"ok": true} if it connected, else the error and its description.  It runs in
 # a process of its own so that the test can give it the environment that the ODBC driver manager reads (ODBCSYSINI,
@@ -40,7 +40,7 @@ sm.addNetworkDeniedIPRange(DeniedAddress + "/32");
 p.setSandboxManager(sm);
 
 list<auto> rv = ();
-foreach hash<auto> conn in (parse_json(ARGV[0])) {
+foreach hash<auto> conn in (parse_json(ReadOnlyFile::readTextFile(ARGV[0]))) {
     rv += p.callFunction("try_open", conn);
 }
 print(make_json(rv) + "\n");
