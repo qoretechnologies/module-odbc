@@ -212,7 +212,12 @@ Servername = %s
             throw "CHILD-ERROR", sprintf("the child process failed (%d): %s", rc, code[0] ?? "no exception code");
         }
         list<auto> lines = select out.split("\n"), $1;
-        return parse_json(lines.last());
+        try {
+            return parse_json(lines.last());
+        } catch (hash<ExceptionInfo> ex) {
+            # the output of the child can hold the connection string
+            throw "CHILD-ERROR", sprintf("the output of the child process cannot be parsed: %s", ex.err);
+        }
     }
 
     private assertAllowed(hash<auto> r, string label) {
