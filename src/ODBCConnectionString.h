@@ -241,8 +241,9 @@ static inline void add_pqopt_secrets(const std::string& v, std::vector<std::stri
         if (i < v.size() && v[i] == '\'') {
             ++i;
             while (i < v.size() && v[i] != '\'') {
-                if (v[i] == '\\' && i + 1 < v.size()) {
-                    ++i;
+                // an escaped character; a backslash at the end is dropped, as libpq does
+                if (v[i] == '\\' && ++i == v.size()) {
+                    break;
                 }
                 value += v[i++];
             }
@@ -251,14 +252,15 @@ static inline void add_pqopt_secrets(const std::string& v, std::vector<std::stri
             }
         } else {
             while (i < v.size() && !isspace(static_cast<unsigned char>(v[i]))) {
-                if (v[i] == '\\' && i + 1 < v.size()) {
-                    ++i;
+                // an escaped character; a backslash at the end is dropped, as libpq does
+                if (v[i] == '\\' && ++i == v.size()) {
+                    break;
                 }
                 value += v[i++];
             }
         }
         std::string uname = upper(name);
-        if (is_secret_key(uname) || uname == "DBNAME" || uname == "SERVICE") {
+        if (is_secret_key(uname) || uname == "SERVICE") {
             add_secret(value, secrets);
         }
     }
