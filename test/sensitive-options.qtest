@@ -28,7 +28,7 @@ class SensitiveOptionsTest inherits QUnit::Test {
     }
 
     optionInfo() {
-%ifdef QoreHasDbiSensitiveOptions
+%ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
         hash<auto> h = dbi_get_driver_options("odbc");
         assertTrue(h.conn.sensitive, "the connection string is sensitive");
         foreach hash<auto> i in (h.pairIterator()) {
@@ -42,7 +42,7 @@ class SensitiveOptionsTest inherits QUnit::Test {
     }
 
     maskedOptions() {
-%ifdef QoreHasDbiSensitiveOptions
+%ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
         assertEq({"conn": "****", "login-timeout": 5},
             mask_datasource_options("odbc", {"conn": "DSN=x;UID=u;PWD=" + Secret, "login-timeout": 5}));
 %else
