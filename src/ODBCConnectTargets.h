@@ -96,6 +96,33 @@ static inline std::string profile_value(const std::string& section, const char* 
     return len > 0 ? std::string(buf, std::min<size_t>(len, sizeof buf - 1)) : std::string();
 }
 
+//! adds the secret values of the DSN's entry in odbc.ini to \a secrets (see odbc_connstr::is_secret_key())
+/** The driver uses the values of the DSN that the connection string does not give, and its diagnostics can name
+    them, for example the user name or database of the DSN.
+*/
+static inline void add_dsn_secrets(const std::string& dsn, std::vector<std::string>& secrets) {
+    if (dsn.empty()) {
+        return;
+    }
+    // the names of the keys of the section, each terminated by a NUL character, the list by a second one
+    std::vector<char> keys(8192);
+#pragma push_macro("SQLGetPrivateProfileString")
+#undef SQLGetPrivateProfileString
+    int len = SQLGetPrivateProfileString(dsn.c_str(), nullptr, "", keys.data(), static_cast<int>(keys.size()),
+        "odbc.ini");
+#pragma pop_macro("SQLGetPrivateProfileString")
+    if (len <= 0) {
+        return;
+    }
+    keys[std::min<size_t>(len, keys.size() - 1)] = '\0';
+    keys.back() = '\0';
+    for (const char* k = keys.data(); k < keys.data() + len && *k; k += strlen(k) + 1) {
+        if (odbc_connstr::is_secret_key(upper(trim(k)))) {
+            odbc_connstr::add_secret(profile_value(dsn, k, "odbc.ini"), secrets);
+        }
+    }
+}
+
 //! the keys of the connection, from the connection string and its DSN (the connection string first)
 class ConnectionKeys {
 public:

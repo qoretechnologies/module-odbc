@@ -162,17 +162,18 @@ static inline bool parse_connection_string(const std::string& s, std::vector<key
 
 //! true if the value of the (upper-case) key identifies or authenticates the connection
 /** The list is conservative: the DSN, the database, the user name, the password, and any key that names a
-    password, token, secret, key or credential.
+    password, token, secret, key or credential, as well as \c PQOPT (libpq options, which can hold any of them)
+    and \c DBQ (the database of some drivers).
 */
 static inline bool is_secret_key(const std::string& key) {
-    static const char* exact[] = {"UID", "DB", "DBNAME", "DSN", "FILEDSN", "SAVEFILE", "PWD"};
+    static const char* exact[] = {"UID", "DB", "DBNAME", "DBQ", "DSN", "FILEDSN", "SAVEFILE", "PWD", "PQOPT"};
     for (const char* k : exact) {
         if (key == k) {
             return true;
         }
     }
-    static const char* parts[] = {"USER", "DATABASE", "CATALOG", "PASSWORD", "PWD", "PASSWD", "TOKEN", "SECRET",
-        "KEY", "CREDENTIAL"};
+    static const char* parts[] = {"USER", "DATABASE", "CATALOG", "PASS", "PWD", "TOKEN", "SECRET", "KEY",
+        "CREDENTIAL"};
     for (const char* p : parts) {
         if (key.find(p) != std::string::npos) {
             return true;
@@ -181,7 +182,13 @@ static inline bool is_secret_key(const std::string& key) {
     return false;
 }
 
-//! adds the value to the list of values to redact, and also its trimmed form if it differs
+//! the length to which a server can cut a name that it shows (PostgreSQL: NAMEDATALEN - 1)
+static constexpr size_t NAME_PREFIX_LEN = 63;
+
+//! adds the value to the list of values to redact, its trimmed form if it differs, and the prefix of a long value
+/** A server can show a long user or database name cut to its maximum name length, which the whole value would not
+    match.
+*/
 static inline void add_secret(const std::string& v, std::vector<std::string>& secrets) {
     if (v.empty()) {
         return;
@@ -190,6 +197,9 @@ static inline void add_secret(const std::string& v, std::vector<std::string>& se
     std::string t = trim(v);
     if (!t.empty() && t != v) {
         secrets.push_back(t);
+    }
+    if (v.size() > NAME_PREFIX_LEN) {
+        secrets.push_back(v.substr(0, NAME_PREFIX_LEN));
     }
 }
 

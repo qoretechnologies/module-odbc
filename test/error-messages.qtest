@@ -94,9 +94,10 @@ class ErrorMessagesTest inherits QUnit::Test {
     connectionError() {
         # the same connection with a port that is not a number: the driver's message shows the value; the database
         # name is not used, as it is masked in connection errors (qore#6994)
-        string bad = regex_subst(connstr, "(^|[;{])Port=[^;}]*", "$1Port=" + PortName, RE_Caseless);
+        string bad = regex_subst(connstr, "(^|;|\\{|conn=)Port=[^;}]*", "$1Port=" + PortName, RE_Caseless);
         if (bad == connstr) {
-            bad = regex_subst(connstr, "(conn=[^}]*)", "$1;Port=" + PortName, RE_Caseless);
+            # the first key is the one the driver uses
+            bad = regex_subst(connstr, "conn=", "conn=Port=" + PortName + ";", RE_Caseless);
         }
         if (bad == connstr) {
             testSkip("the connection string has no conn option");
@@ -110,5 +111,6 @@ class ErrorMessagesTest inherits QUnit::Test {
         }
         assertEq("ODBC-CONNECTION-ERROR", ex.err);
         # in the driver's message
-        assertGe(1, occurrences(ex.desc, PortName), ex.desc);    }
+        assertGe(1, occurrences(ex.desc, PortName), ex.desc);
+    }
 }

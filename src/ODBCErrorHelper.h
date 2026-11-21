@@ -49,7 +49,8 @@ public:
         @param handle ODBC handle
         @param s string where the output will be written to
      */
-    DLLLOCAL static void extractDiag(SQLSMALLINT handleType, SQLHANDLE& handle, std::string& s) {
+    DLLLOCAL static void extractDiag(SQLSMALLINT handleType, SQLHANDLE& handle, std::string& s,
+            const std::vector<std::string>* secrets = nullptr) {
         SQLINTEGER i = 0;
         SQLINTEGER native;
         SQLCHAR state[7];
@@ -68,16 +69,24 @@ public:
             s += std::to_string(native);
             s += "): ";
             // a longer message is read whole, so that no value in it is cut (and could not be masked whole)
+            std::string msg;
             if (len >= (SQLSMALLINT)sizeof(text) && len < 32767) {
                 std::vector<SQLCHAR> buf(static_cast<size_t>(len) + 1);
                 SQLSMALLINT len2;
                 if (SQL_SUCCEEDED(SQLGetDiagRecA(handleType, handle, i, state, &native, buf.data(),
                         static_cast<SQLSMALLINT>(buf.size()), &len2))) {
-                    s += reinterpret_cast<char*>(buf.data());
-                    continue;
+                    msg = reinterpret_cast<char*>(buf.data());
+                } else {
+                    msg = reinterpret_cast<char*>(text);
                 }
+            } else {
+                msg = reinterpret_cast<char*>(text);
             }
-            s += reinterpret_cast<char*>(text);
+            // only the message is masked: the SQLSTATE and native code are kept as they are
+            if (secrets) {
+                odbc_connstr::redact(msg, *secrets);
+            }
+            s += msg;
         }
     }
 
@@ -143,8 +152,7 @@ public:
             }
         }
         std::string diag;
-        extractDiag(handleType, handle, diag);
-        odbc_connstr::redact(diag, secrets);
+        extractDiag(handleType, handle, diag, &secrets);
         desc->concat(diag.c_str());
         xsink->raiseException(err, desc.release());
     }

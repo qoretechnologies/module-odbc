@@ -113,6 +113,21 @@ void ODBCConnection::collectSecrets() {
     // the secret values of the whole connection string: from a connection string in the database name, the "conn"
     // option and the other options
     odbc_connstr::add_secrets(connStr.c_str(), secrets);
+#ifdef HAVE_ODBCINST
+    // and those of its DSN, which the driver uses where the connection string does not give them
+    {
+        std::vector<odbc_connstr::keyval_t> kv;
+        std::string err;
+        if (odbc_connstr::parse_connection_string(connStr.c_str(), kv, err)) {
+            for (const odbc_connstr::keyval_t& p : kv) {
+                if (p.first == "DSN") {
+                    qore_odbc_targets::add_dsn_secrets(p.second, secrets);
+                    break;
+                }
+            }
+        }
+    }
+#endif
     odbc_connstr::finish_secrets(secrets);
 }
 
