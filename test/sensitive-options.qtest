@@ -1,0 +1,52 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that the driver declares its "conn" option, whose connection string can hold credentials, sensitive, and that
+# Qore masks its value where it shows the options of a datasource (qore#7070).  No database is needed.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class SensitiveOptionsTest
+
+class SensitiveOptionsTest inherits QUnit::Test {
+    public {
+        const Secret = "PWD_SECRET_7070";
+    }
+
+    constructor() : QUnit::Test("odbc sensitive options", "1.0", \ARGV) {
+        addTestCase("option information", \optionInfo());
+        addTestCase("masked options", \maskedOptions());
+        set_return_value(main());
+    }
+
+    optionInfo() {
+%ifdef QoreHasDbiSensitiveOptions
+        hash<auto> h = dbi_get_driver_options("odbc");
+        assertTrue(h.conn.sensitive, "the connection string is sensitive");
+        foreach hash<auto> i in (h.pairIterator()) {
+            if (i.key != "conn") {
+                assertFalse(i.value.sensitive, i.key);
+            }
+        }
+%else
+        testSkip("the Qore library has no sensitive DBI options");
+%endif
+    }
+
+    maskedOptions() {
+%ifdef QoreHasDbiSensitiveOptions
+        assertEq({"conn": "****", "login-timeout": 5},
+            mask_datasource_options("odbc", {"conn": "DSN=x;UID=u;PWD=" + Secret, "login-timeout": 5}));
+%else
+        testSkip("the Qore library has no sensitive DBI options");
+%endif
+    }
+}

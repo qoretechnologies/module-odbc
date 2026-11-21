@@ -12,6 +12,9 @@
 
     @subsection odbcv2_features New Features
 
+    - <b>Security</b>: the \c "conn" option, whose connection string can hold credentials, is declared sensitive
+      (with %Qore 3.0 or later), so that %Qore masks its value where it shows the options of a datasource
+      (qore#7070)
     - <b>Security</b>: the module reports the destinations of its connections for the PostgreSQL, MySQL and MariaDB
       drivers, so that code under a sandbox that restricts the network can connect where the policy of the sandbox
       allows, and connects only to the checked address; other connections are refused: see @ref odbcsandboxguide

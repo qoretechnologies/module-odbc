@@ -26,7 +26,9 @@
     - \c "bigint-native": bind Qore int values as native \c SQL_C_SBIGINT values to ODBC statements; this is the
       default
     - \c "bigint-string": bind Qore int values as \c SQL_C_CHAR values (strings) to ODBC statements
-    - \c "conn": the ODBC connection string (ex: \c "driver=xyz;server=abc" etc)
+    - \c "conn": the ODBC connection string (ex: \c "driver=xyz;server=abc" etc); it can hold credentials
+      (\c UID, \c PWD and other secrets), so the driver declares it sensitive: its value is masked where %Qore shows
+      the options of a datasource (with %Qore 3.0 or later; see \c mask_datasource_options())
     - \c "fractional-precision": precision to use for the fractional seconds part of date, time, timestamp and
       interval values; in the range 1-9 (default is 3)
     - \c "login-timeout": timeout value in seconds used for logging in to the connection (connecting); possible values

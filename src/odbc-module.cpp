@@ -487,7 +487,15 @@ static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
         "accepted by Timezone::constructor() on the client (ie either a region name or a UTC offset like "
         "\"+01:00\"), if not set the server's time zone will be assumed to be the same as the client's",
         stringTypeInfo);
-    methods.registerOption(OPT_CONN, "set the ODBC connection string", stringTypeInfo);
+    // the connection string can hold the user name and password (UID and PWD) and other secrets, so its value is
+    // masked where Qore shows the options of a datasource (qore#7070)
+#ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
+    methods.registerOption(OPT_CONN, "set the ODBC connection string; it can hold credentials and is sensitive",
+        stringTypeInfo, QDBI_OPT_SENSITIVE);
+#else
+    methods.registerOption(OPT_CONN, "set the ODBC connection string; it can hold credentials and is sensitive",
+        stringTypeInfo);
+#endif
     methods.registerOption(OPT_BIGINT_NATIVE, "sets native bigint support");
     methods.registerOption(OPT_BIGINT_STRING, "sets string bigint support");
     methods.registerOption(OPT_FRAC_PRECISION, "sets fractional precision");
