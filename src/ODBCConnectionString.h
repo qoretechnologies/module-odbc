@@ -203,22 +203,72 @@ static inline void add_secret(const std::string& v, std::vector<std::string>& se
     }
 }
 
-//! adds the value of a secret key to \a secrets
-/** The value of \c PQOPT is a list of libpq options (<tt>key=value ...</tt>), whose parts libpq can show on their
-    own, so each of them is added too.
+//! adds the secret parts of a libpq options string (the value of \c PQOPT) to \a secrets
+/** The string is a list of <tt>key=value</tt> options separated by white space, where a value can be quoted with
+    \c ' and contain \c \\ escapes. The values of the secret options (see is_secret_key(), and \c dbname and
+    \c service) are added, and every element without \c '=', which libpq shows in its error. The names of the
+    options and the values of the other options are not added, as libpq shows them in other messages (for example
+    an invalid option name, or the host).
 */
+static inline void add_pqopt_secrets(const std::string& v, std::vector<std::string>& secrets) {
+    size_t i = 0;
+    while (i < v.size()) {
+        while (i < v.size() && isspace(static_cast<unsigned char>(v[i]))) {
+            ++i;
+        }
+        if (i == v.size()) {
+            break;
+        }
+        // the name, up to '=' or white space
+        size_t start = i;
+        while (i < v.size() && v[i] != '=' && !isspace(static_cast<unsigned char>(v[i]))) {
+            ++i;
+        }
+        std::string name = v.substr(start, i - start);
+        while (i < v.size() && isspace(static_cast<unsigned char>(v[i]))) {
+            ++i;
+        }
+        if (i == v.size() || v[i] != '=') {
+            // an element without '='
+            add_secret(name, secrets);
+            continue;
+        }
+        ++i;
+        while (i < v.size() && isspace(static_cast<unsigned char>(v[i]))) {
+            ++i;
+        }
+        std::string value;
+        if (i < v.size() && v[i] == '\'') {
+            ++i;
+            while (i < v.size() && v[i] != '\'') {
+                if (v[i] == '\\' && i + 1 < v.size()) {
+                    ++i;
+                }
+                value += v[i++];
+            }
+            if (i < v.size()) {
+                ++i;
+            }
+        } else {
+            while (i < v.size() && !isspace(static_cast<unsigned char>(v[i]))) {
+                if (v[i] == '\\' && i + 1 < v.size()) {
+                    ++i;
+                }
+                value += v[i++];
+            }
+        }
+        std::string uname = upper(name);
+        if (is_secret_key(uname) || uname == "DBNAME" || uname == "SERVICE") {
+            add_secret(value, secrets);
+        }
+    }
+}
+
+//! adds the value of a secret key to \a secrets, and the secret parts of a \c PQOPT value
 static inline void add_key_secret(const std::string& key, const std::string& v, std::vector<std::string>& secrets) {
     add_secret(v, secrets);
     if (key == "PQOPT") {
-        size_t b = 0;
-        while (b < v.size()) {
-            size_t n = v.find_first_of(" \t='", b);
-            add_secret(v.substr(b, n == std::string::npos ? std::string::npos : n - b), secrets);
-            if (n == std::string::npos) {
-                break;
-            }
-            b = n + 1;
-        }
+        add_pqopt_secrets(v, secrets);
     }
 }
 

@@ -106,16 +106,17 @@ static inline void add_dsn_secrets(const std::string& dsn, std::vector<std::stri
     }
 #pragma push_macro("SQLGetPrivateProfileString")
 #undef SQLGetPrivateProfileString
-    // reads into a buffer that is enlarged until the result fits (the driver manager returns only what fits)
+    // reads into a buffer that is enlarged until the result fits: the driver manager returns only the whole keys
+    // that fit, so a list is complete only if it leaves more room than the longest key name (unixODBC: 1000 bytes)
     auto read = [&dsn](const char* key, std::vector<char>& buf) -> int {
-        for (size_t size = 8192; size <= 1024 * 1024; size *= 4) {
+        for (size_t size = 8192; size <= 2 * 1024 * 1024; size *= 4) {
             buf.assign(size, '\0');
             int len = SQLGetPrivateProfileString(dsn.c_str(), key, "", buf.data(), static_cast<int>(size),
                 "odbc.ini");
             if (len <= 0) {
                 return 0;
             }
-            if (static_cast<size_t>(len) < size - 2) {
+            if (static_cast<size_t>(len) < size / 2) {
                 return len;
             }
         }

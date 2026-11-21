@@ -60,7 +60,9 @@ Datasource db(SQL::DSODBC, user, pass, dsn, "UTF8");
     whose name contains \c USER, \c DATABASE, \c CATALOG, \c PASS, \c PWD, \c TOKEN, \c SECRET, \c KEY or
     \c CREDENTIAL, as well as \c UID, \c DB, \c DBNAME, \c DBQ, \c DSN, \c FILEDSN, \c SAVEFILE and \c PQOPT)
     are masked as \c ****, also where they come from the entry of a DSN in \c odbc.ini, and also the first 63 bytes
-    of a longer value, as a server can show a long name cut to that length.  If a connection string cannot be
+    of a longer value, as a server can show a long name cut to that length.  Of the libpq options of \c PQOPT, the
+    values of the secret options (and \c dbname and \c service) and any element without \c "=" are masked on their
+    own as well.  If a connection string cannot be
     parsed, all of its values are masked.  The values are matched exactly as they were given: a driver or server
     that shows a value in another form or encoding is not covered, nor is a value in a \c conn connection string
     that is not written in braces where it must be, as the driver reads part of it as another key.
