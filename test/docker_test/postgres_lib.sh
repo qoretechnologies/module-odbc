@@ -71,13 +71,64 @@ pg_read_map_password() {
     } 2>/dev/null
 }
 
+# pg_valid_test_name <name>: true only for a name of the shape that this job generates
+pg_valid_test_name() {
+    case "$1" in
+        qore_test_??????????) ;;
+        *) return 1 ;;
+    esac
+    case "${1#qore_test_}" in
+        *[!abcdefghijklmnopqrstuvwxyz0123456789]*) return 1 ;;
+    esac
+}
+
+# Prints a new name for the test database and role; fails if it cannot generate one of the exact shape.
+# NOTE: must convert to lower case only, or the psql commands will fail
+pg_new_test_name() {
+    local suffix name
+    suffix=$(qore -lUtil -ne 'printf("%s", get_random_string(10));') || return 1
+    name=qore_test_$(printf '%s' "${suffix}" | tr A-Z a-z)
+    pg_valid_test_name "${name}" || return 1
+    printf '%s\n' "${name}"
+}
+
+# pg_create_test_objects <name>: creates the database, then the role, and records each only after its own create
+# succeeded, so that the exit handler can never drop an object that already existed.
+# VERBOSITY=sqlstate: an error is reported by its code, without the statement, which holds a password
+pg_create_test_objects() {
+    cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || return
+create database $1 encoding = 'utf8';
+EOF
+    odbc_owned_db=$1
+    # CREATEROLE lets SqlUtil's PgsqlBoundedTransaction.qtest create (and drop) the role its row-security case needs
+    cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || return
+create user $1 password '${PG_TEST_PASS}' createrole;
+EOF
+    odbc_owned_role=$1
+    # not ON_ERROR_STOP: the vector extension is optional on a shared host
+    cat <<EOF | psql -Upostgres -d "$1" -v VERBOSITY=sqlstate ${PSQL_ARGS} || return
+create extension if not exists vector;
+grant create, connect, temp on database $1 to $1;
+grant select on all tables in schema pg_catalog to $1;
+grant all on schema public to $1;
+EOF
+}
+
 setup_postgres_on_host() {
     { local pg_trace_flags=$-; set +x; } 2>/dev/null
     local pg_env="${ENV_FILE:-/tmp/env.sh}"
     local PG_TEST_PASS=qore
+    local user pg_create_status=0
     # add env vars to environment file and load it
-    # NOTE: must convert to lower case only, or the psql commands below will fail
-    user=qore_test_`qore -lUtil -ne 'printf("%s", get_random_string(10));' | tr A-Z a-z`
+    if ! user=$(pg_new_test_name); then
+        echo "ERROR: cannot generate the name of the test database" >&2
+        {
+            case $pg_trace_flags in
+                *x*) set -x ;;
+            esac
+            return 1
+        } 2>/dev/null
+    fi
     ci_env_export "${pg_env}" QORE_DB_USER "${user}"
     ci_env_export "${pg_env}" QORE_DB_PASS "${PG_TEST_PASS}"
     ci_env_export "${pg_env}" QORE_DB_NAME "${user}"
@@ -97,22 +148,19 @@ setup_postgres_on_host() {
 
     ci_source_env "${pg_env}"
 
-    # set before anything is created, so that a failure below still drops it: see odbc_cleanup_on_exit()
-    export POSTGRES_HOST=1
-
-    # VERBOSITY=sqlstate: an error is reported by its code, without the statement, which holds a password
-    # create user for test; CREATEROLE lets SqlUtil's PgsqlBoundedTransaction.qtest create (and drop) the role its
-    # row-security case needs
-    cat <<EOF | psql -Upostgres -v VERBOSITY=sqlstate ${PSQL_ARGS}
-create database ${QORE_DB_NAME} encoding = 'utf8';
-\connect ${QORE_DB_NAME};
-create extension if not exists vector;
-create user ${QORE_DB_USER} password '${PG_TEST_PASS}' createrole;
-grant create, connect, temp on database ${QORE_DB_NAME} to ${QORE_DB_USER};
-grant select on all tables in schema pg_catalog to ${QORE_DB_USER};
-grant all on schema public to ${QORE_DB_USER};
-EOF
-    echo created pgsql user ${QORE_DB_USER} and db ${QORE_DB_NAME}
+    # nothing is owned yet, whatever the environment file held
+    unset odbc_owned_db odbc_owned_role
+    pg_create_test_objects "${user}" || pg_create_status=$?
+    if [ "${pg_create_status}" != 0 ]; then
+        echo "ERROR: cannot create the test database and role (status ${pg_create_status})" >&2
+        {
+            case $pg_trace_flags in
+                *x*) set -x ;;
+            esac
+            return "${pg_create_status}"
+        } 2>/dev/null
+    fi
+    echo created pgsql user ${user} and db ${user}
 
     # make sure we can access the DB
     pg_check_connection
@@ -156,6 +204,8 @@ setup_odbc_database() {
         setup_postgres_on_host
         export QORE_DB_CONNSTR_ODBC="odbc:${QORE_DB_USER}/${QORE_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${QORE_DB_HOST};Database=${QORE_DB_NAME}}"
     fi
+    # a file that the job sources later cannot change what the exit handler drops
+    readonly odbc_owned_db odbc_owned_role
     {
         case $odbc_trace_flags in
             *x*) set -x ;;
@@ -163,30 +213,63 @@ setup_odbc_database() {
     } 2>/dev/null
 }
 
+# Drops only what this job created and recorded: the database first, then the role.  Each name is validated again, so
+# the administrator's objects and the names in QORE_DB_* can never be dropped.  Returns the first failure.
 cleanup_postgres_on_host() {
-    if [ "${POSTGRES_HOST}" = "1" ]; then
-        # drop postgresql test user
-        cat <<EOF | psql -Upostgres ${PSQL_ARGS}
-drop owned by ${QORE_DB_USER};
-drop database ${QORE_DB_NAME} with (force);
-drop role ${QORE_DB_USER};
+    local db_status=0 role_status=0
+    if [ -n "${odbc_owned_db:-}" ]; then
+        if pg_valid_test_name "${odbc_owned_db}"; then
+            cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || db_status=$?
+drop database ${odbc_owned_db} with (force);
 EOF
-        echo dropped pgsql user ${QORE_DB_USER}
+            if [ "${db_status}" = 0 ]; then
+                echo dropped pgsql db ${odbc_owned_db}
+            fi
+        else
+            echo "ERROR: not dropping a database with an unexpected name" >&2
+            db_status=1
+        fi
     fi
+    if [ -n "${odbc_owned_role:-}" ]; then
+        if pg_valid_test_name "${odbc_owned_role}"; then
+            cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || role_status=$?
+drop owned by ${odbc_owned_role};
+drop role ${odbc_owned_role};
+EOF
+            if [ "${role_status}" = 0 ]; then
+                echo dropped pgsql user ${odbc_owned_role}
+            fi
+        else
+            echo "ERROR: not dropping a role with an unexpected name" >&2
+            role_status=1
+        fi
+    fi
+    if [ "${db_status}" != 0 ]; then
+        return "${db_status}"
+    fi
+    return "${role_status}"
 }
 
-# The exit handler of the job: drops what the job created on a shared host, however the job ended, and exits with the
-# status of the job, or of the cleanup if the job passed.
+# Clears the job's ownership state, which is never exported and so cannot be inherited, and then installs the exit
+# handler.  INT and TERM end the job through the handler; SIGKILL cannot be handled.
+odbc_cleanup_install() {
+    unset odbc_owned_db odbc_owned_role
+    trap odbc_cleanup_on_exit EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+
+# The exit handler of the job: drops what the job recorded on a shared host, without being interrupted by INT or TERM,
+# and exits with the status of the job, or of the cleanup if the job passed.
 odbc_cleanup_on_exit() {
-    local job_status=$? cleanup_status
+    local job_status=$? cleanup_status=0
     trap - EXIT
+    trap '' INT TERM
     set +e
-    # in a subshell with "set -e", so that a failed statement is the status of the cleanup
-    (set -e; cleanup_postgres_on_host)
+    cleanup_postgres_on_host
     cleanup_status=$?
     if [ "${job_status}" != 0 ]; then
         exit "${job_status}"
     fi
     exit "${cleanup_status}"
 }
-

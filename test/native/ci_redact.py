@@ -9,6 +9,7 @@ MASK = "<masked>"
 _KEY = re.compile(r"(?:^|(?<=[;,{\s])|(?<=conn=))(?:pwd|password|passwd)\s*=[ \t]*", re.I)
 _QUOTED = re.compile(r"'(?:[^'\\]|\\.)*'|\"[^\"]*\"", re.S)
 # the user part of a datasource descriptor; a "/" in an option value does not start a password
+_NEXT_KEY = re.compile(r"[,\s]\s*[A-Za-z_]\w*\s*=")
 _USER = re.compile(r"(?:[^:/@{(;=]*:)?[^:/@{(;=]*/")
 
 
@@ -29,15 +30,13 @@ def _braced_values(text, start):
 def _plain_values(text, start):
     """Returns the forms of an unbraced value: it runs to ";" or the end of the connection string.
 
-    In a datasource descriptor, a "," or the closing "}" of the options can end it first, and in libpq options white
-    space can, so each of those shorter forms is masked as well.
+    In a datasource descriptor, the next option or the closing "}" of the options can end it first, and in libpq options
+    the next key can, so those shorter forms are masked as well.  A "," or a space that no key follows is part of the
+    value: masking the text before it would mask an ordinary word everywhere.
     """
     end = text.find(";", start)
     raw = (text[start:] if end < 0 else text[start:end]).strip()
-    values = {raw, raw.rstrip("}")}
-    for pattern in (r",", r"\s"):
-        values.add(re.split(pattern, raw, maxsplit=1)[0].rstrip("}"))
-    return values
+    return {raw, raw.rstrip("}"), _NEXT_KEY.split(raw, maxsplit=1)[0].rstrip("}")}
 
 
 def _attribute_values(text, start):
@@ -47,7 +46,10 @@ def _attribute_values(text, start):
     quoted = _QUOTED.match(text, start)
     if quoted:
         raw = quoted.group(0)
-        return {raw, raw[1:-1], re.sub(r"\\(.)", r"\1", raw[1:-1], flags=re.S)}
+        # text after the closing quote is still part of an ODBC value
+        plain = _plain_values(text, start)
+        joined = {item.replace(raw, raw[1:-1], 1) for item in plain}
+        return {raw, raw[1:-1], re.sub(r"\\(.)", r"\1", raw[1:-1], flags=re.S)} | plain | joined
     return _plain_values(text, start)
 
 
@@ -57,12 +59,11 @@ def _descriptor_values(value):
     if not user:
         return set()
     rest = value[user.end():]
+    # the password can end at the options or at the end, even when an "@" follows it in the options
+    found = {re.split(r"[({]", rest, maxsplit=1)[0]}
     ats = [i for i, char in enumerate(rest) if char == "@"]
-    if ats:
-        # the password ends at one of the "@" characters: each candidate is masked
-        return {rest[:at] for at in ats}
-    # no "@": the password runs to the options or to the end
-    return {rest, re.split(r"[({]", rest, maxsplit=1)[0]}
+    # or at one of the "@" characters: each candidate is masked
+    return found | {rest[:at] for at in ats}
 
 
 def secrets(env=None):

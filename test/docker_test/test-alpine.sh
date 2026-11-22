@@ -24,8 +24,8 @@ odbcinst -i -d -f /tmp/psqlodbc.ini
 
 # the test database
 . "$(dirname "${BASH_SOURCE[0]}")/postgres_lib.sh"
-# a failed test must not leave the role and the database on a shared host
-trap odbc_cleanup_on_exit EXIT
+# a failed test should not leave what this job created on a shared host
+odbc_cleanup_install
 setup_odbc_database
 
 # setup MODULE_SRC_DIR env var

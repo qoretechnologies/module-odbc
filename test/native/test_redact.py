@@ -68,7 +68,28 @@ class RedactTest(unittest.TestCase):
 
     def test_plain_value_runs_to_the_semicolon(self):
         value = f"odbc:@(UTF8){{{DRIVER};PWD=fake secret 10;Port=1}}"
-        self.check({"QORE_DB_CONNSTR_ODBC": value}, "fake secret 10", "fake")
+        env = {"QORE_DB_CONNSTR_ODBC": value}
+        self.check(env, "fake secret 10")
+        # the first word of a password with spaces is an ordinary word elsewhere
+        self.assertEqual("fake", redact("fake", env))
+
+    def test_comma_inside_a_value(self):
+        env = {"QORE_DB_CONNSTR_ODBC": "PWD=fake,secret-20;Port=1"}
+        self.check(env, "fake,secret-20")
+        self.assertEqual("fake", redact("fake", env))
+
+    def test_libpq_value_ends_before_the_next_key(self):
+        env = {"QORE_DB_CONNSTR_ODBC": "odbc:@(UTF8){pqopt={password=fake-secret-21 host=db}}"}
+        self.check(env, "fake-secret-21")
+        self.assertEqual("host=db", redact("host=db", env))
+
+    def test_quoted_value_followed_by_plain_text(self):
+        env = {"QORE_DB_CONNSTR_ODBC": "PWD='fake'secret-22;Port=1"}
+        self.check(env, "'fake'secret-22", "fakesecret-22")
+
+    def test_descriptor_with_at_in_its_options(self):
+        env = {"QORE_DB_CONNSTR_ODBC": "odbc:fake_user/fake-secret-23(UTF8){x=a@b}"}
+        self.check(env, "fake-secret-23")
 
     def test_plain_value_before_a_datasource_option(self):
         value = f"odbc:@(UTF8){{{DRIVER};PWD=fake-secret-11,min=1}}"
@@ -199,7 +220,7 @@ class CiScriptTest(unittest.TestCase):
     def test_the_exit_handler_is_set_before_the_database_is_created(self):
         for script in ("test-ubuntu.sh", "test-alpine.sh"):
             text = (HERE.parent / "docker_test" / script).read_text()
-            handler = text.find("\ntrap odbc_cleanup_on_exit EXIT\n")
+            handler = text.find("\nodbc_cleanup_install\n")
             setup = text.find("\nsetup_odbc_database\n")
             self.assertTrue(0 <= handler < setup, f"{script}: the handler must be set before the database setup")
             self.assertEqual(-1, text.find("\ncleanup_postgres_on_host"), f"{script}: cleanup runs only in the handler")
