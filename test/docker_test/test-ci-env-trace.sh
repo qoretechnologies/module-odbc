@@ -113,7 +113,14 @@ case "$*" in
     *FAKE-SENTINEL-NOT-A-CREDENTIAL*)
         : > "${STUB_DIR}/args-leak"
         exit 99 ;;
-    *"select 1"*|*"SELECT 1"*) ;;
+    *"select 1"*|*"SELECT 1"*)
+        # no startup file may change the readiness probe either
+        case " $* " in
+            *" -X "*) ;;
+            *)
+                : > "${STUB_DIR}/psql-unsafe"
+                exit 97 ;;
+        esac ;;
     *)
         # a statement with a password must run with VERBOSITY=sqlstate: psql would print it in an error
         sql=$(cat)
@@ -504,11 +511,22 @@ for shell in bash sh; do
         check_owned $shell "psql arguments '$args' are refused at the cleanup" 1 \
             "db-postgres db-$n role-postgres role-$n" "setup_odbc_database; PSQL_ARGS='$args'"
     done
-    if [ "$shell" = bash ]; then
-        # a POSIX shell refuses a function named after a special builtin
+    # bash and busybox ash let a function shadow a special builtin; dash refuses to define one
+    if "$shell" -c 'unset() { :; }' 2>/dev/null; then
         odbc_owned_db=$z odbc_owned_role=$z OWNED_PRE="db-$z role-$z" OWNED_PREAMBLE='unset() { :; }' \
             check_owned $shell "a shadowed unset does not keep an inherited name" 7 \
             "db-postgres db-$z role-postgres role-$z" '(exit 7); touch after-failure'
+        OWNED_PRE="db-$z role-$z" check_owned $shell "a shadowed trap does not keep the handler after a failed clear" 1 \
+            "db-postgres db-$z role-postgres role-$z" \
+            "trap() { :; }; printf 'readonly odbc_owned_db=$z\n' > \"\$ENV_FILE\"; setup_odbc_database; touch after-failure"
+    fi
+    PSQL_ARGS='-c x' STUB_GETENT=ok check_owned $shell "odd psql arguments with nothing to drop, service path" 0 "$admin" \
+        setup_odbc_database
+    PSQL_ARGS='-c x' check_owned $shell "odd psql arguments with nothing to drop, no setup" 0 "$admin" ':'
+    if [ "$shell" = bash ]; then
+        # the signal arrives in the handler, just before INT and TERM are ignored: the cleanup still runs
+        OWNED_PREAMBLE='trap() { if [ -z "${odbc_test_sent:-}" ] && [ -z "${1:-}" ]; then odbc_test_sent=1; kill -TERM $$; fi; builtin trap "$@"; }' \
+            check_owned $shell "TERM before the signals are ignored does not skip the cleanup" 143 "$admin" "$job"
         # the signal arrives between the two steps at the start of the handler
         OWNED_PREAMBLE='trap() { if [ "$1" = - ]; then kill -TERM $$; fi; builtin trap "$@"; }' \
             check_owned $shell "TERM at the start of the handler keeps the status and the cleanup" 7 "$admin" "$job"

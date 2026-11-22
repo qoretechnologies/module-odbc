@@ -96,20 +96,12 @@ pg_valid_psql_args() {
 }
 
 # Clears the job's record of what it created.  If a value cannot be cleared, such as a read-only one, it cannot be
-# trusted: the exit handler is removed, so that nothing is dropped, and this fails.  "builtin" is used in bash because a
-# function can shadow "unset" there; sh has no "builtin", and "command" keeps a read-only error from ending the shell.
+# trusted: the exit handler is removed, so that nothing is dropped, and this fails.  "command" runs the builtins even if
+# a function shadows them, and keeps a read-only error from ending a POSIX shell.
 pg_clear_ownership() {
-    if [ -n "${BASH_VERSION:-}" ]; then
-        builtin unset -v odbc_owned_db odbc_owned_role 2>/dev/null || :
-    else
-        command unset -v odbc_owned_db odbc_owned_role 2>/dev/null || :
-    fi
+    command unset -v odbc_owned_db odbc_owned_role 2>/dev/null || :
     if [ -n "${odbc_owned_db+x}" ] || [ -n "${odbc_owned_role+x}" ]; then
-        if [ -n "${BASH_VERSION:-}" ]; then
-            builtin trap - EXIT
-        else
-            command trap - EXIT
-        fi
+        command trap - EXIT
         echo "ERROR: cannot clear the record of the test database and role; nothing will be dropped" >&2
         return 1
     fi
@@ -233,7 +225,7 @@ setup_odbc_database() {
         printf "waiting on PostgreSQL server: "
         waited=0
         while true; do
-            if PGPASSWORD=${QORE_DB_PASS} psql -h ${QORE_DB_HOST} -U ${QORE_DB_USER} -d ${QORE_DB_NAME} -c "SELECT 1" > /dev/null 2>&1; then
+            if PGPASSWORD=${QORE_DB_PASS} psql -X -h ${QORE_DB_HOST} -U ${QORE_DB_USER} -d ${QORE_DB_NAME} -c "SELECT 1" > /dev/null 2>&1; then
                 echo "ready"
                 break
             fi
@@ -263,12 +255,9 @@ setup_odbc_database() {
 # a name such as the administrator's is refused; QORE_DB_* is not read.  Returns the first failure.
 cleanup_postgres_on_host() {
     local db_status=0 role_status=0
-    if ! pg_valid_psql_args; then
-        echo "ERROR: PSQL_ARGS may only name a host; not dropping the test database and role" >&2
-        return 1
-    fi
     if [ -n "${odbc_owned_db:-}" ]; then
-        if pg_valid_test_name "${odbc_owned_db}"; then
+        # PSQL_ARGS matters only when there is something to drop
+        if pg_valid_psql_args && pg_valid_test_name "${odbc_owned_db}"; then
             cat <<EOF | psql -X -Upostgres -d postgres ${PSQL_ARGS} -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || db_status=$?
 drop database ${odbc_owned_db} with (force);
 EOF
@@ -276,12 +265,12 @@ EOF
                 echo dropped pgsql db ${odbc_owned_db}
             fi
         else
-            echo "ERROR: not dropping a database with an unexpected name" >&2
+            echo "ERROR: not dropping the database: unexpected name or PSQL_ARGS" >&2
             db_status=1
         fi
     fi
     if [ -n "${odbc_owned_role:-}" ]; then
-        if pg_valid_test_name "${odbc_owned_role}"; then
+        if pg_valid_psql_args && pg_valid_test_name "${odbc_owned_role}"; then
             cat <<EOF | psql -X -Upostgres -d postgres ${PSQL_ARGS} -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || role_status=$?
 drop owned by ${odbc_owned_role};
 drop role ${odbc_owned_role};
@@ -290,7 +279,7 @@ EOF
                 echo dropped pgsql user ${odbc_owned_role}
             fi
         else
-            echo "ERROR: not dropping a role with an unexpected name" >&2
+            echo "ERROR: not dropping the role: unexpected name or PSQL_ARGS" >&2
             role_status=1
         fi
     fi
@@ -306,15 +295,21 @@ EOF
 odbc_cleanup_install() {
     pg_clear_ownership || return 1
     trap odbc_cleanup_on_exit EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    trap 'odbc_cleanup_finish 130' INT
+    trap 'odbc_cleanup_finish 143' TERM
 }
 
-# The exit handler of the job: drops what the job recorded on a shared host, without being interrupted by INT or TERM,
-# and exits with the status of the job, or of the cleanup if the job passed.
+# The exit handler of the job.
 odbc_cleanup_on_exit() {
-    local job_status=$? cleanup_status=0
-    # first, so that a signal cannot skip the cleanup or replace the status of the job
+    odbc_cleanup_finish "$?"
+}
+
+# odbc_cleanup_finish <status>: drops what the job recorded on a shared host and exits with the status, or with that of
+# the cleanup if the status is 0.  INT and TERM also end the job here.  One that arrives before they are ignored below
+# runs this function itself: the cleanup still runs once, and the job exits with the status of the signal, which is a
+# failure, instead of its own.  SIGKILL cannot be handled.
+odbc_cleanup_finish() {
+    local job_status=$1 cleanup_status=0
     trap '' INT TERM
     trap - EXIT
     set +e
