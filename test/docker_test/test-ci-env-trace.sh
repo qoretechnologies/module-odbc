@@ -171,15 +171,24 @@ case "$*" in
                     else
                         : > "$server/role-$name"
                     fi ;;
+                "create extension "*)
+                    if [ "${STUB_PSQL_FAIL:-}" = extension ]; then
+                        failed=1
+                    fi ;;
                 "grant "*)
                     # the connection to the new database is lost
                     if [ "${STUB_PSQL_FAIL:-}" = grant ]; then
                         exit 2
+                    fi
+                    if [ "${STUB_PSQL_FAIL:-}" = grant-sql ]; then
+                        failed=1
                     fi ;;
                 "drop database "*)
                     printf 'x\n' >> "${STUB_DIR}/drop-log"
+                    printf '%s|%s|%s|%s|%s|%s|%s\n' "${PGHOST:-}" "${PGHOSTADDR:-}" "${PGPORT:-}" "${PGSERVICE:-}" \
+                        "${PGSERVICEFILE:-}" "${PGSYSCONFDIR:-}" "$*" > "${STUB_DIR}/drop-target"
                     if [ -n "${STUB_PSQL_SIGNAL:-}" ]; then
-                        kill -TERM "$PPID"
+                        kill -TERM "${STUB_JOB_PID:-$PPID}"
                     fi
                     name=${line#drop database }
                     name=${name%% *}
@@ -381,13 +390,15 @@ check_owned() {
     local out rc expected=$3 left
     : > "$work/setup-env.sh"
     rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe" "$work/after-failure" \
-        "$work/drop-log" "$work/caller-exit"
+        "$work/drop-log" "$work/drop-target" "$work/caller-exit"
     # shellcheck disable=SC2086
     reset_server ${OWNED_PRE:-}
     out=$(STUB_SERVER_SET=1 run_lib "$1" "${OWNED_FAIL:-}" "$sentinel" "
         set -e
         ${OWNED_PREAMBLE:-}
         echo job-started
+        STUB_JOB_PID=\$\$
+        export STUB_JOB_PID
         ${OWNED_INSTALL-odbc_cleanup_install}
         set -x
         $5
@@ -510,8 +521,8 @@ for shell in bash sh; do
     for args in "-c x" "-f /x" "-a" "-h db -c x" "-h -x" "-h db;x" "otherdb"; do
         check_owned $shell "psql arguments '$args' are refused at the setup" 1 "$admin" \
             "unset POSTGRES_PASSWORD_MAP; export PSQL_ARGS='$args'; setup_odbc_database; touch after-failure"
-        check_owned $shell "psql arguments '$args' are refused at the cleanup" 1 \
-            "db-postgres db-$n role-postgres role-$n" "setup_odbc_database; PSQL_ARGS='$args'"
+        check_owned $shell "a later change of the psql arguments to '$args' does not change the cleanup" 0 "$admin" \
+            "setup_odbc_database; PSQL_ARGS='$args'"
     done
     # bash and busybox ash let a function shadow a special builtin; dash refuses to define one
     if "$shell" -c 'unset() { :; }' 2>/dev/null; then
@@ -578,8 +589,51 @@ for shell in bash sh; do
             "ci_env_export() { if [ \"\$2\" = $name ]; then return 5; fi; }; $unchecked"
     done
     odbc_setup_started=1 check_owned $shell "an inherited setup flag does not refuse the setup" 0 "$admin" setup_odbc_database
-    check_owned $shell "a variable set by the environment file does not disarm the handlers" 9 "$admin" \
-        "printf 'pg_rearm=\n' > \"\$ENV_FILE\"; setup_odbc_database; exit 9"
+    check_owned $shell "the install flag is read-only after the setup" 9 "$admin" \
+        'setup_odbc_database; if (odbc_cleanup_installed=) 2>/dev/null; then touch after-failure; fi; exit 9'
+    STUB_PSQL_FAIL=grant-sql check_owned $shell "a failed grant fails the setup" 3 "$admin" \
+        'setup_odbc_database; touch after-failure'
+    STUB_PSQL_FAIL=grant-sql check_owned $shell "a failed grant is returned" 9 "$admin" "$unchecked"
+    STUB_PSQL_FAIL=extension check_owned $shell "the vector extension stays optional" 0 "$admin" setup_odbc_database
+    # the cleanup connects where the setup connected, whatever the job changes later
+    pg_vars="PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR"
+    first= later=
+    for var in $pg_vars; do
+        first="$first $var=first"
+        later="$later $var=later"
+    done
+    check_owned $shell "the cleanup keeps the recorded connection" 0 "$admin" \
+        "export$first; setup_odbc_database; export$later; PSQL_ARGS='-h later'"
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        "first|first|first|first|first|first|"*"-h pgsql "*)
+            echo "ok: $shell: owned: the drop used the recorded connection" ;;
+        *)
+            echo "FAIL: $shell: owned: the drop did not use the recorded connection"
+            fail=1 ;;
+    esac
+    check_owned $shell "connection settings added later are not used" 0 "$admin" \
+        "setup_odbc_database; export$later"
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        "||||||"*"-h pgsql "*)
+            echo "ok: $shell: owned: settings added after the setup were ignored" ;;
+        *)
+            echo "FAIL: $shell: owned: settings added after the setup reached the drop"
+            fail=1 ;;
+    esac
+    check_owned $shell "the recorded target is read-only after the setup" 9 "$admin" \
+        'setup_odbc_database; if (odbc_target_host=later) 2>/dev/null; then touch after-failure; fi; exit 9'
+    OWNED_PRE="db-$n role-$n" check_owned $shell "a recorded target that is not a host is refused" 1 \
+        "db-postgres db-$n role-postgres role-$n" "odbc_owned_db=$n; odbc_owned_role=$n; odbc_target_args='-c x'"
+    for var in args host hostaddr port service servicefile sysconfdir; do
+        OWNED_PRE="db-$z role-$z" check_owned $shell "a read-only target $var fails closed" 9 "$other" \
+            "printf 'readonly odbc_target_$var=later\n' > \"\$ENV_FILE\"; if setup_odbc_database 2> clear.err; then touch after-failure; fi; exit 9"
+        if grep -q 'cannot clear the record' "$work/clear.err"; then
+            echo "ok: $shell: owned: a read-only target $var is refused by the clear"
+        else
+            echo "FAIL: $shell: owned: a read-only target $var was not refused by the clear"
+            fail=1
+        fi
+    done
     check_owned $shell "the environment file cannot reset the setup flag" nonzero "$admin" \
         "printf 'export odbc_setup_started=\n' > \"\$ENV_FILE\"; if setup_odbc_database; then :; fi; setup_odbc_database; touch after-failure"
     check_owned $shell "the environment file cannot disarm the handlers" nonzero "$admin" \
