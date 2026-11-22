@@ -7,8 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from ci_redact import redact
-
+from ci_redact import redact, redacted_repr
 
 
 def main():
@@ -32,7 +31,7 @@ def main():
         env = dict(os.environ, LD_PRELOAD=str(library))
         result = subprocess.run(["qore", "-b", "--enable-debug", "-l", str(module),
                                  str(root / "bind-failure.qtest"), "-v"],
-                                env=env, capture_output=True, text=True, timeout=60)
+                                env=env, capture_output=True, text=True, errors="replace", timeout=60)
         print(redact(result.stdout), end="")
         print(redact(result.stderr), end="")
         result.check_returncode()
@@ -41,7 +40,7 @@ def main():
                     "ODBC_BIND_TRACE bind column 2"]
         if trace != expected:
             raise AssertionError("Binding continued after the first failed NULL parameter: "
-                                 + redact(repr(trace)))
+                                 + redacted_repr(trace))
         print("Binding stops at the injected error and a fresh execution recovers")
 
 

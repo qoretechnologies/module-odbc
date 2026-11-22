@@ -9,8 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from ci_redact import redact
-
+from ci_redact import redact, redacted_repr
 
 
 def scenarios(disconnect_error):
@@ -28,7 +27,7 @@ def has_disconnect_error(module):
     """Return whether the module raises ODBC-DISCONNECT-ERROR, which depends on the Qore version it was built with."""
     result = subprocess.run(["qore", "-b", "-l", str(module), "-ne",
                              "printf(\"%d\", ODBC_HAVE_DISCONNECT_ERROR ? 1 : 0);"],
-                            capture_output=True, text=True, timeout=60, check=True)
+                            capture_output=True, text=True, errors="replace", timeout=60, check=True)
     return result.stdout.strip() == "1"
 
 
@@ -51,9 +50,9 @@ def main():
             try:
                 result = subprocess.run(["qore", "-b", "--enable-debug", "-l", str(module),
                                          str(root / "driver-faults.qtest"), "-v"],
-                                        env=env, capture_output=True, text=True, timeout=60)
+                                        env=env, capture_output=True, text=True, errors="replace", timeout=60)
             except subprocess.TimeoutExpired as e:
-                print(redact(e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")), end="")
+                print(redact(e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")), end="")
                 raise AssertionError(fault + ": the test did not end within 60 seconds")
             print(redact(result.stdout), end="")
             print(redact(result.stderr), end="")
@@ -61,7 +60,7 @@ def main():
             trace = [line for line in result.stderr.splitlines() if line.startswith("ODBC_FAULT_TRACE ")]
             counts = {line: trace.count(line) for line in expected}
             if counts != expected:
-                raise AssertionError(fault + ": unexpected driver calls: " + redact(repr(trace)))
+                raise AssertionError(fault + ": unexpected driver calls: " + redacted_repr(trace))
             print(fault + ": handled")
 
 

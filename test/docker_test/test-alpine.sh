@@ -24,6 +24,8 @@ odbcinst -i -d -f /tmp/psqlodbc.ini
 
 # the test database
 . "$(dirname "${BASH_SOURCE[0]}")/postgres_lib.sh"
+# a failed test must not leave the role and the database on a shared host
+trap odbc_cleanup_on_exit EXIT
 setup_odbc_database
 
 # setup MODULE_SRC_DIR env var
@@ -82,7 +84,7 @@ done
 ${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/build gosu qore:qore
 
 # Exercise native connection-option failures without a database.
-python3 test/native/run-connection-options.py "build/odbc-api-$(qore --latest-module-api).qmod"
+python3 -B -W error test/native/run-connection-options.py "build/odbc-api-$(qore --latest-module-api).qmod"
 RESULTS="$RESULTS $?"
 
 # The runners below mask credentials in what they print.
@@ -94,11 +96,6 @@ python3 -B -W error test/native/run-bind-failure.py "build/odbc-api-$(qore --lat
 RESULTS="$RESULTS $?"
 python3 -B -W error test/native/run-driver-faults.py "build/odbc-api-$(qore --latest-module-api).qmod"
 RESULTS="$RESULTS $?"
-
-# Cleanup if using shared host
-if ! getent hosts postgres > /dev/null 2>&1; then
-    cleanup_postgres_on_host
-fi
 
 # check the results
 for R in $RESULTS; do

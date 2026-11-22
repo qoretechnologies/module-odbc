@@ -7,8 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from ci_redact import redact
-
+from ci_redact import redact, redacted_repr
 
 
 def main():
@@ -28,7 +27,7 @@ def main():
             command = ['valgrind', '--quiet', '--error-exitcode=99', '--leak-check=full',
                        '--errors-for-leak-kinds=definite,indirect'] + command
         result = subprocess.run(command, env=dict(os.environ, LD_PRELOAD=str(library)),
-                                capture_output=True, text=True, timeout=240)
+                                capture_output=True, text=True, errors='replace', timeout=240)
         if result.returncode:
             raise AssertionError(redact(result.stdout + result.stderr))
         # Autocommit is always mandatory; only unconfigured timeout defaults may reach connect.
@@ -37,7 +36,7 @@ def main():
             expected += ['ATTRIBUTE 60', 'CONNECT', 'ATTRIBUTE 0', 'ATTRIBUTE 1', 'ATTRIBUTE 4294967295']
         trace = [line for line in result.stderr.splitlines()
                  if line.startswith('ATTRIBUTE ') or line == 'CONNECT']
-        assert trace == expected, redact(str(trace))
+        assert trace == expected, redacted_repr(trace)
         print(redact(result.stdout), end='')
         print('18 connection option fault cases passed')
 

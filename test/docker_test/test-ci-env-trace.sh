@@ -118,6 +118,11 @@ case "$*" in
                         : > "${STUB_DIR}/verbosity-lost"
                         exit 98 ;;
                 esac ;;
+            *"drop role"*)
+                : > "${STUB_DIR}/cleanup-ran"
+                if [ "${STUB_FAIL:-}" = drop ]; then
+                    exit 5
+                fi ;;
         esac ;;
 esac
 exit 0
@@ -263,6 +268,39 @@ check_codes_guard() {
     fi
 }
 
+# check_cleanup <shell> <name> <expected status> <stub failure> <cleanup expected: yes or no> <job>: the exit handler
+# drops the test database when the job fails, keeps the status of the job, and traces no credential
+check_cleanup() {
+    local out rc
+    : > "$work/setup-env.sh"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/cleanup-ran" "$work/after-failure"
+    out=$(run_lib "$1" "$4" "$sentinel" "
+        QORE_DB_USER=qore_test_user
+        QORE_DB_NAME=qore_test_user
+        QORE_DB_PASS=\$POSTGRES_PASSWORD_MAP
+        export QORE_DB_PASS
+        trap odbc_cleanup_on_exit EXIT
+        set -e
+        set -x
+        echo job-started
+        $6
+        ")
+    rc=$?
+    check_output "$1: cleanup: $2" "$rc" "$3" job-started "$out"
+    if [ -e "$work/after-failure" ]; then
+        echo "FAIL: $1: cleanup: $2: the job continued after a failure"
+        fail=1
+    elif [ "$5" = yes ] && [ ! -e "$work/cleanup-ran" ]; then
+        echo "FAIL: $1: cleanup: $2: the test database was not dropped"
+        fail=1
+    elif [ "$5" = no ] && [ -e "$work/cleanup-ran" ]; then
+        echo "FAIL: $1: cleanup: $2: a database that the job did not create was dropped"
+        fail=1
+    else
+        echo "ok: $1: cleanup: $2: cleanup $5, job stopped at the failure"
+    fi
+}
+
 newline_value="first line
 $sentinel
 last line"
@@ -292,6 +330,13 @@ for shell in bash sh; do
     check_codes_guard $shell off
     check_odbc $shell ok
     check_odbc $shell fail
+    check_cleanup $shell "a failed job" 7 "" yes "POSTGRES_HOST=1; (exit 7); touch after-failure"
+    check_cleanup $shell "a job that passes" 0 "" yes "POSTGRES_HOST=1"
+    check_cleanup $shell "a failed cleanup fails the job" 5 drop yes "POSTGRES_HOST=1"
+    check_cleanup $shell "a failed job keeps its status" 7 drop yes "POSTGRES_HOST=1; (exit 7); touch after-failure"
+    check_cleanup $shell "the service database is kept" 7 "" no "(exit 7); touch after-failure"
+    STUB_GETENT=fail check_cleanup $shell "a setup that fails after creating the database" 4 connection yes \
+        "unset QORE_DB_USER QORE_DB_NAME QORE_DB_PASS; setup_odbc_database; touch after-failure"
     check_code $shell DATASOURCE-PARSE-ERROR "x
 DATASOURCE-PARSE-ERROR: missing database name in 'odbc:u/$sentinel'"
     check_code $shell DBI:PGSQL:ERROR "DBI:PGSQL:ERROR: $sentinel@db: failed"

@@ -97,6 +97,9 @@ setup_postgres_on_host() {
 
     ci_source_env "${pg_env}"
 
+    # set before anything is created, so that a failure below still drops it: see odbc_cleanup_on_exit()
+    export POSTGRES_HOST=1
+
     # VERBOSITY=sqlstate: an error is reported by its code, without the statement, which holds a password
     # create user for test; CREATEROLE lets SqlUtil's PgsqlBoundedTransaction.qtest create (and drop) the role its
     # row-security case needs
@@ -119,8 +122,6 @@ EOF
             *x*) set -x ;;
         esac
     } 2>/dev/null
-
-    export POSTGRES_HOST=1
 }
 
 # Sets up the test database of the job and QORE_DB_CONNSTR_ODBC, which holds its password, without tracing it
@@ -172,5 +173,20 @@ drop role ${QORE_DB_USER};
 EOF
         echo dropped pgsql user ${QORE_DB_USER}
     fi
+}
+
+# The exit handler of the job: drops what the job created on a shared host, however the job ended, and exits with the
+# status of the job, or of the cleanup if the job passed.
+odbc_cleanup_on_exit() {
+    local job_status=$? cleanup_status
+    trap - EXIT
+    set +e
+    # in a subshell with "set -e", so that a failed statement is the status of the cleanup
+    (set -e; cleanup_postgres_on_host)
+    cleanup_status=$?
+    if [ "${job_status}" != 0 ]; then
+        exit "${job_status}"
+    fi
+    exit "${cleanup_status}"
 }
 
