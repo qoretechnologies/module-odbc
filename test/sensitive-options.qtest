@@ -43,8 +43,11 @@ class SensitiveOptionsTest inherits QUnit::Test {
 
     maskedOptions() {
 %ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
-        assertEq({"conn": "****", "login-timeout": 5},
-            mask_datasource_options("odbc", {"conn": "DSN=x;UID=u;PWD=" + Secret, "login-timeout": 5}));
+        # a value that is shown is given as a string; "conn-timeout" is not sensitive, but its name has "conn", which
+        # can name a connection string, so its value is masked as well
+        assertEq({"conn": "****", "login-timeout": "5", "conn-timeout": "****"},
+            mask_datasource_options("odbc", {"conn": "DSN=x;UID=u;PWD=" + Secret, "login-timeout": 5,
+                "conn-timeout": 5}));
 %else
         testSkip("the Qore library has no sensitive DBI options");
 %endif
