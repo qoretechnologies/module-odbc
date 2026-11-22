@@ -16,6 +16,9 @@ if [ -z "$work" ] || [ ! -d "$work" ]; then
 fi
 trap 'rm -rf "$work"' EXIT
 fail=0
+# the settings that select the server come only from the test cases
+unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS \
+    PSQL_ARGS
 
 printf 'export CI_ENV_TEST_VALUE=%s\n' "$sentinel" > "$work/env.sh"
 printf '. "%s/ci_env.sh"\nci_source_env "%s/env.sh"\nexport CI_ENV_TEST_NESTED=1\n' "$here" "$work" > "$work/nested.sh"
@@ -113,7 +116,14 @@ case "$*" in
     *FAKE-SENTINEL-NOT-A-CREDENTIAL*)
         : > "${STUB_DIR}/args-leak"
         exit 99 ;;
-    *"select 1"*|*"SELECT 1"*) ;;
+    *"select 1"*|*"SELECT 1"*)
+        # no startup file may change the readiness probe either
+        case " $* " in
+            *" -X "*) ;;
+            *)
+                : > "${STUB_DIR}/psql-unsafe"
+                exit 97 ;;
+        esac ;;
     *)
         # a statement with a password must run with VERBOSITY=sqlstate: psql would print it in an error
         sql=$(cat)
@@ -164,14 +174,25 @@ case "$*" in
                     else
                         : > "$server/role-$name"
                     fi ;;
+                "create extension "*)
+                    if [ "${STUB_PSQL_FAIL:-}" = extension ]; then
+                        failed=1
+                    fi ;;
                 "grant "*)
                     # the connection to the new database is lost
                     if [ "${STUB_PSQL_FAIL:-}" = grant ]; then
                         exit 2
+                    fi
+                    if [ "${STUB_PSQL_FAIL:-}" = grant-sql ]; then
+                        failed=1
                     fi ;;
                 "drop database "*)
+                    printf 'x\n' >> "${STUB_DIR}/drop-log"
+                    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "${PGHOST-<unset>}" "${PGHOSTADDR-<unset>}" "${PGPORT-<unset>}" \
+                        "${PGSERVICE-<unset>}" "${PGSERVICEFILE-<unset>}" "${PGSYSCONFDIR-<unset>}" \
+                        "${PGTARGETSESSIONATTRS-<unset>}" "${PGLOADBALANCEHOSTS-<unset>}" "$*" > "${STUB_DIR}/drop-target"
                     if [ -n "${STUB_PSQL_SIGNAL:-}" ]; then
-                        kill -TERM "$PPID"
+                        kill -TERM "${STUB_JOB_PID:-$PPID}"
                     fi
                     name=${line#drop database }
                     name=${name%% *}
@@ -368,18 +389,21 @@ check_codes_guard() {
 # check_owned <shell> <name> <expected status, or "nonzero"> <objects left on the server> <job>: the exit handler drops
 # only what this job created and recorded, keeps the status of the job, and traces no credential.  OWNED_PRE lists the
 # objects that exist before the job, OWNED_FAIL is the failure of the stub tools, and OWNED_PREAMBLE runs before the
-# handler is installed.
+# handler is installed; OWNED_INSTALL replaces the installation of the handler.
 check_owned() {
     local out rc expected=$3 left
     : > "$work/setup-env.sh"
-    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe" "$work/after-failure"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe" "$work/after-failure" \
+        "$work/drop-log" "$work/drop-target" "$work/caller-exit"
     # shellcheck disable=SC2086
     reset_server ${OWNED_PRE:-}
     out=$(STUB_SERVER_SET=1 run_lib "$1" "${OWNED_FAIL:-}" "$sentinel" "
         set -e
         ${OWNED_PREAMBLE:-}
         echo job-started
-        odbc_cleanup_install
+        STUB_JOB_PID=\$\$
+        export STUB_JOB_PID
+        ${OWNED_INSTALL-odbc_cleanup_install}
         set -x
         $5
         ")
@@ -388,6 +412,10 @@ check_owned() {
         expected=$rc
     fi
     check_output "$1: owned: $2" "$rc" "$expected" job-started "$out"
+    if printf '%s\n' "$out" | grep -q -F -- '-h pgsql'; then
+        echo "FAIL: $1: owned: $2: the recorded host is in the trace"
+        fail=1
+    fi
     left=$(cd "$work/server" && ls | sort | tr '\n' ' ')
     if [ -e "$work/after-failure" ]; then
         echo "FAIL: $1: owned: $2: the job continued after a failure"
@@ -501,17 +529,190 @@ for shell in bash sh; do
     for args in "-c x" "-f /x" "-a" "-h db -c x" "-h -x" "-h db;x" "otherdb"; do
         check_owned $shell "psql arguments '$args' are refused at the setup" 1 "$admin" \
             "unset POSTGRES_PASSWORD_MAP; export PSQL_ARGS='$args'; setup_odbc_database; touch after-failure"
-        check_owned $shell "psql arguments '$args' are refused at the cleanup" 1 \
-            "db-postgres db-$n role-postgres role-$n" "setup_odbc_database; PSQL_ARGS='$args'"
+        check_owned $shell "a later change of the psql arguments to '$args' does not change the cleanup" 0 "$admin" \
+            "setup_odbc_database; PSQL_ARGS='$args'"
     done
-    if [ "$shell" = bash ]; then
-        # a POSIX shell refuses a function named after a special builtin
+    # bash and busybox ash let a function shadow a special builtin; dash refuses to define one
+    if "$shell" -c 'unset() { :; }' 2>/dev/null; then
         odbc_owned_db=$z odbc_owned_role=$z OWNED_PRE="db-$z role-$z" OWNED_PREAMBLE='unset() { :; }' \
             check_owned $shell "a shadowed unset does not keep an inherited name" 7 \
             "db-postgres db-$z role-postgres role-$z" '(exit 7); touch after-failure'
+        OWNED_PRE="db-$z role-$z" check_owned $shell "a shadowed trap does not keep the handler after a failed clear" 1 \
+            "db-postgres db-$z role-postgres role-$z" \
+            "trap() { :; }; printf 'readonly odbc_owned_db=$z\n' > \"\$ENV_FILE\"; setup_odbc_database; touch after-failure"
+    fi
+    PSQL_ARGS='-c x' STUB_GETENT=ok check_owned $shell "odd psql arguments with nothing to drop, service path" 0 "$admin" \
+        setup_odbc_database
+    PSQL_ARGS='-c x' check_owned $shell "odd psql arguments with nothing to drop, no setup" 0 "$admin" ':'
+    if [ "$shell" = bash ]; then
+        # the signal arrives in the handler, just before INT and TERM are ignored: the cleanup still runs
+        OWNED_PREAMBLE='command() { if [ "${1:-}" = trap ] && [ -z "${2:-}" ] && [ -z "${odbc_test_sent:-}" ]; then odbc_test_sent=1; kill -TERM $$; fi; builtin command "$@"; }' \
+            check_owned $shell "TERM before the signals are ignored does not skip the cleanup" 143 "$admin" "$job"
         # the signal arrives between the two steps at the start of the handler
-        OWNED_PREAMBLE='trap() { if [ "$1" = - ]; then kill -TERM $$; fi; builtin trap "$@"; }' \
+        OWNED_PREAMBLE='command() { if [ "${1:-}" = trap ] && [ "${2:-}" = - ] && [ "$#" = 3 ]; then kill -TERM $$; fi; builtin command "$@"; }' \
             check_owned $shell "TERM at the start of the handler keeps the status and the cleanup" 7 "$admin" "$job"
+    fi
+    # the handlers are armed only while the ownership state is known to be this job's own
+    other="db-postgres db-$z role-postgres role-$z"
+    for sig in TERM INT; do
+        OWNED_PRE="db-$z role-$z" check_owned $shell "$sig after a failed clear in the setup drops nothing" nonzero "$other" \
+            "printf 'readonly odbc_owned_db=$z\n' > \"\$ENV_FILE\"; if setup_odbc_database; then touch after-failure; fi; kill -$sig \$\$; exit 9"
+        OWNED_PRE="db-$z role-$z" check_owned $shell "$sig after a failed clear drops nothing" nonzero "$other" \
+            "readonly odbc_owned_db=$z; if pg_clear_ownership; then touch after-failure; fi; kill -$sig \$\$; exit 9"
+        OWNED_PRE="db-$z role-$z" check_owned $shell "$sig while the environment file is sourced drops nothing" nonzero \
+            "$other" "printf 'export odbc_owned_db=$z\nkill -$sig \$\$\n' > \"\$ENV_FILE\"; setup_odbc_database; exit 9"
+        check_owned $shell "$sig after the setup still cleans up" nonzero "$admin" \
+            "setup_odbc_database; kill -$sig \$\$; exit 9"
+    done
+    OWNED_PRE="db-$z role-$z" check_owned $shell "a failure in the environment file drops nothing" nonzero "$other" \
+        "printf 'export odbc_owned_db=$z\nfalse\n' > \"\$ENV_FILE\"; setup_odbc_database; touch after-failure"
+    OWNED_PRE="db-$z role-$z" STUB_PSQL_FAIL="create database" check_owned $shell \
+        "a record cannot be changed after a failed setup" nonzero "$other" \
+        "if setup_odbc_database; then touch after-failure; fi; printf 'export odbc_owned_db=$z\n' > \"\$ENV_FILE\"; ci_source_env \"\$ENV_FILE\"; exit 9"
+    OWNED_PRE="db-$z role-$z" STUB_PSQL_FAIL="create user" check_owned $shell \
+        "a partial record cannot be changed and is still dropped" nonzero "$other" \
+        "if setup_odbc_database; then touch after-failure; fi; printf 'export odbc_owned_db=$z\n' > \"\$ENV_FILE\"; ci_source_env \"\$ENV_FILE\"; exit 9"
+    # without "set -e", every failure of the setup is returned to the caller
+    unchecked='if setup_odbc_database; then touch after-failure; fi; exit 9'
+    OWNED_FAIL=connection check_owned $shell "a failed connection check is returned" 9 "$admin" "$unchecked"
+    OWNED_FAIL=map check_owned $shell "a failed password map is returned" 9 "$admin" "$unchecked"
+    # dash and busybox ash apply "set -e" inside a sourced file even under "if", so the job can end there instead
+    check_owned $shell "a failed environment file is returned" nonzero "$admin" \
+        "printf 'return 7\n' > \"\$ENV_FILE\"; $unchecked"
+    check_owned $shell "a failed write of the environment file is returned" 9 "$admin" \
+        "ENV_FILE=$work/no-such-directory/env.sh; $unchecked"
+    check_owned $shell "a second setup is refused and the first is dropped" 1 "$admin" \
+        'setup_odbc_database; setup_odbc_database; touch after-failure'
+    check_owned $shell "a second setup without set -e keeps the first record" 9 "$admin" \
+        'if setup_odbc_database; then :; fi; if setup_odbc_database 2> second-setup.err; then touch after-failure; fi; exit 9'
+    if grep -q 'already set up' "$work/second-setup.err"; then
+        echo "ok: $shell: owned: a second setup is refused with a clear error"
+    else
+        echo "FAIL: $shell: owned: a second setup was not refused with a clear error"
+        fail=1
+    fi
+    for name in QORE_DB_USER QORE_DB_PASS QORE_DB_NAME QORE_DB_HOST QORE_DB_CONNSTR_PGSQL QORE_DB_CONNSTR PGPASSWORD \
+        PSQL_ARGS; do
+        check_owned $shell "a failed export of $name is returned" 9 "$admin" \
+            "ci_env_export() { if [ \"\$2\" = $name ]; then return 5; fi; }; $unchecked"
+    done
+    odbc_setup_started=1 check_owned $shell "an inherited setup flag does not refuse the setup" 0 "$admin" setup_odbc_database
+    check_owned $shell "the install flag is read-only after the setup" 9 "$admin" \
+        'setup_odbc_database; if (odbc_cleanup_installed=) 2>/dev/null; then touch after-failure; fi; exit 9'
+    STUB_PSQL_FAIL=grant-sql check_owned $shell "a failed grant fails the setup" 3 "$admin" \
+        'setup_odbc_database; touch after-failure'
+    STUB_PSQL_FAIL=grant-sql check_owned $shell "a failed grant is returned" 9 "$admin" "$unchecked"
+    STUB_PSQL_FAIL=extension check_owned $shell "the vector extension stays optional" 0 "$admin" setup_odbc_database
+    # the cleanup connects where the setup connected, whatever the job changes later
+    pg_vars="PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS"
+    first= later=
+    for var in $pg_vars; do
+        first="$first $var=first"
+        later="$later $var=later"
+    done
+    check_owned $shell "the cleanup keeps the recorded connection" 0 "$admin" \
+        "export$first; setup_odbc_database; export$later; PSQL_ARGS='-h later'"
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        "first|first|first|first|first|first|first|first|"*"-h pgsql "*)
+            echo "ok: $shell: owned: the drop used the recorded connection" ;;
+        *)
+            echo "FAIL: $shell: owned: the drop did not use the recorded connection"
+            fail=1 ;;
+    esac
+    check_owned $shell "connection settings added later are not used" 0 "$admin" \
+        "setup_odbc_database; export$later"
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        "<unset>|<unset>|<unset>|<unset>|<unset>|<unset>|<unset>|<unset>|"*"-h pgsql "*)
+            echo "ok: $shell: owned: settings added after the setup were ignored" ;;
+        *)
+            echo "FAIL: $shell: owned: settings added after the setup reached the drop"
+            fail=1 ;;
+    esac
+    check_owned $shell "the recorded target is read-only after the setup" 9 "$admin" \
+        'setup_odbc_database; if (odbc_target_host=later) 2>/dev/null; then touch after-failure; fi; exit 9'
+    for var in $pg_vars; do
+        check_owned $shell "a read-only $var set later stops the drop" 1 "db-postgres db-$n role-postgres role-$n" \
+            "setup_odbc_database; export $var=later; readonly $var"
+        if [ -e "$work/drop-target" ]; then
+            echo "FAIL: $shell: owned: psql ran with a read-only $var"
+            fail=1
+        else
+            echo "ok: $shell: owned: psql did not run with a read-only $var"
+        fi
+    done
+    for var in $pg_vars; do
+        check_owned $shell "a read-only $var without a value stops the drop" nonzero \
+            "db-postgres db-$n role-postgres role-$n" "export $var=first; setup_odbc_database; unset $var; readonly $var"
+        if [ -e "$work/drop-target" ]; then
+            echo "FAIL: $shell: owned: psql ran without the recorded $var"
+            fail=1
+        else
+            echo "ok: $shell: owned: psql did not run without the recorded $var"
+        fi
+    done
+    check_owned $shell "a setup without a recorded host" 0 "$admin" 'unset POSTGRES_PASSWORD_MAP; setup_odbc_database'
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        *" -h "*)
+            echo "FAIL: $shell: owned: a host was added to the drop"
+            fail=1 ;;
+        *" -X "*|*"-X "*)
+            echo "ok: $shell: owned: the drop without a host ignores startup files" ;;
+        *)
+            echo "FAIL: $shell: owned: the drop without a host did not run"
+            fail=1 ;;
+    esac
+    check_owned $shell "IFS does not split the recorded host" 0 "$admin" 'setup_odbc_database; IFS=g'
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        *"-h pgsql "*)
+            echo "ok: $shell: owned: the host reached psql whole" ;;
+        *)
+            echo "FAIL: $shell: owned: IFS split the host"
+            fail=1 ;;
+    esac
+    OWNED_PRE="db-$n role-$n" check_owned $shell "a recorded target that is not a host is refused" 1 \
+        "db-postgres db-$n role-postgres role-$n" "odbc_owned_db=$n; odbc_owned_role=$n; odbc_target_args='-c x'"
+    for var in args host hostaddr port service servicefile sysconfdir session_attrs load_balance; do
+        OWNED_PRE="db-$z role-$z" check_owned $shell "a read-only target $var fails closed" 9 "$other" \
+            "printf 'readonly odbc_target_$var=later\n' > \"\$ENV_FILE\"; if setup_odbc_database 2> clear.err; then touch after-failure; fi; exit 9"
+        if grep -q 'cannot clear the record' "$work/clear.err"; then
+            echo "ok: $shell: owned: a read-only target $var is refused by the clear"
+        else
+            echo "FAIL: $shell: owned: a read-only target $var was not refused by the clear"
+            fail=1
+        fi
+    done
+    check_owned $shell "the environment file cannot reset the setup flag" nonzero "$admin" \
+        "printf 'export odbc_setup_started=\n' > \"\$ENV_FILE\"; if setup_odbc_database; then :; fi; setup_odbc_database; touch after-failure"
+    check_owned $shell "the environment file cannot disarm the handlers" nonzero "$admin" \
+        "printf 'odbc_cleanup_installed=\n' > \"\$ENV_FILE\"; setup_odbc_database; exit 9"
+    OWNED_PRE="db-$z role-$z" check_owned $shell "a failed clear with no signal drops nothing" 9 "$other" \
+        "readonly odbc_owned_db=$z; if pg_clear_ownership; then touch after-failure; fi; exit 9"
+    OWNED_INSTALL=: check_owned $shell "a setup without the handler arms nothing" 0 \
+        "db-postgres db-$n role-postgres role-$n" setup_odbc_database
+    odbc_cleanup_installed=1 OWNED_INSTALL=: check_owned $shell "an inherited install flag arms nothing" 0 \
+        "db-postgres db-$n role-postgres role-$n" setup_odbc_database
+    OWNED_INSTALL='trap ": > caller-exit" EXIT' check_owned $shell "a setup without the handler keeps the caller's trap" 0 \
+        "db-postgres db-$n role-postgres role-$n" setup_odbc_database
+    if [ -e "$work/caller-exit" ]; then
+        echo "ok: $shell: owned: the caller's exit trap still runs"
+    else
+        echo "FAIL: $shell: owned: the setup removed the caller's exit trap"
+        fail=1
+    fi
+    if "$shell" -c 'trap() { :; }' 2>/dev/null; then
+        OWNED_PREAMBLE='trap() { :; }' check_owned $shell "a shadowed trap does not repeat the cleanup" 143 "$admin" \
+            'setup_odbc_database; kill -TERM $$; exit 9'
+        if [ "$(wc -l < "$work/drop-log")" -eq 1 ]; then
+            echo "ok: $shell: owned: the cleanup ran once"
+        else
+            echo "FAIL: $shell: owned: the cleanup did not run exactly once"
+            fail=1
+        fi
+        OWNED_PRE="db-$z role-$z" OWNED_PREAMBLE='trap() { :; }' check_owned $shell \
+            "a shadowed trap does not keep the handlers after a failed clear" nonzero "$other" \
+            "readonly odbc_owned_db=$z; if pg_clear_ownership; then touch after-failure; fi; kill -TERM \$\$; exit 9"
+        OWNED_PREAMBLE='trap() { :; }' STUB_PSQL_SIGNAL=1 check_owned $shell \
+            "a shadowed trap does not let TERM stop the cleanup" 0 "$admin" setup_odbc_database
     fi
     check_owned $shell "TERM stops the job and cleans up" 143 "$admin" \
         'setup_odbc_database; kill -TERM $$; touch after-failure'
