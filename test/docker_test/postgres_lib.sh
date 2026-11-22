@@ -351,7 +351,7 @@ setup_odbc_database() {
             fi
             if [ $waited -eq 30 ]; then
                 echo && echo "Waited too long for PostgreSQL to start; aborting build."
-                # the one setup failure that ends the job instead of being returned: nothing is owned on this path
+                # this failure ends the job instead of being returned: nothing is owned on this path
                 exit 1
             fi
             printf .
