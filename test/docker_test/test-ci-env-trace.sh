@@ -547,6 +547,43 @@ for shell in bash sh; do
     done
     OWNED_PRE="db-$z role-$z" check_owned $shell "a failure in the environment file drops nothing" nonzero "$other" \
         "printf 'export odbc_owned_db=$z\nfalse\n' > \"\$ENV_FILE\"; setup_odbc_database; touch after-failure"
+    OWNED_PRE="db-$z role-$z" STUB_PSQL_FAIL="create database" check_owned $shell \
+        "a record cannot be changed after a failed setup" nonzero "$other" \
+        "if setup_odbc_database; then touch after-failure; fi; printf 'export odbc_owned_db=$z\n' > \"\$ENV_FILE\"; ci_source_env \"\$ENV_FILE\"; exit 9"
+    OWNED_PRE="db-$z role-$z" STUB_PSQL_FAIL="create user" check_owned $shell \
+        "a partial record cannot be changed and is still dropped" nonzero "$other" \
+        "if setup_odbc_database; then touch after-failure; fi; printf 'export odbc_owned_db=$z\n' > \"\$ENV_FILE\"; ci_source_env \"\$ENV_FILE\"; exit 9"
+    # without "set -e", every failure of the setup is returned to the caller
+    unchecked='if setup_odbc_database; then touch after-failure; fi; exit 9'
+    OWNED_FAIL=connection check_owned $shell "a failed connection check is returned" 9 "$admin" "$unchecked"
+    OWNED_FAIL=map check_owned $shell "a failed password map is returned" 9 "$admin" "$unchecked"
+    # dash and busybox ash apply "set -e" inside a sourced file even under "if", so the job can end there instead
+    check_owned $shell "a failed environment file is returned" nonzero "$admin" \
+        "printf 'return 7\n' > \"\$ENV_FILE\"; $unchecked"
+    check_owned $shell "a failed write of the environment file is returned" 9 "$admin" \
+        "ENV_FILE=$work/no-such-directory/env.sh; $unchecked"
+    check_owned $shell "a second setup is refused and the first is dropped" 1 "$admin" \
+        'setup_odbc_database; setup_odbc_database; touch after-failure'
+    check_owned $shell "a second setup without set -e keeps the first record" 9 "$admin" \
+        'if setup_odbc_database; then :; fi; if setup_odbc_database 2> second-setup.err; then touch after-failure; fi; exit 9'
+    if grep -q 'already set up' "$work/second-setup.err"; then
+        echo "ok: $shell: owned: a second setup is refused with a clear error"
+    else
+        echo "FAIL: $shell: owned: a second setup was not refused with a clear error"
+        fail=1
+    fi
+    for name in QORE_DB_USER QORE_DB_PASS QORE_DB_NAME QORE_DB_HOST QORE_DB_CONNSTR_PGSQL QORE_DB_CONNSTR PGPASSWORD \
+        PSQL_ARGS; do
+        check_owned $shell "a failed export of $name is returned" 9 "$admin" \
+            "ci_env_export() { if [ \"\$2\" = $name ]; then return 5; fi; }; $unchecked"
+    done
+    odbc_setup_started=1 check_owned $shell "an inherited setup flag does not refuse the setup" 0 "$admin" setup_odbc_database
+    check_owned $shell "a variable set by the environment file does not disarm the handlers" 9 "$admin" \
+        "printf 'pg_rearm=\n' > \"\$ENV_FILE\"; setup_odbc_database; exit 9"
+    check_owned $shell "the environment file cannot reset the setup flag" nonzero "$admin" \
+        "printf 'export odbc_setup_started=\n' > \"\$ENV_FILE\"; if setup_odbc_database; then :; fi; setup_odbc_database; touch after-failure"
+    check_owned $shell "the environment file cannot disarm the handlers" nonzero "$admin" \
+        "printf 'odbc_cleanup_installed=\n' > \"\$ENV_FILE\"; setup_odbc_database; exit 9"
     OWNED_PRE="db-$z role-$z" check_owned $shell "a failed clear with no signal drops nothing" 9 "$other" \
         "readonly odbc_owned_db=$z; if pg_clear_ownership; then touch after-failure; fi; exit 9"
     OWNED_INSTALL=: check_owned $shell "a setup without the handler arms nothing" 0 \

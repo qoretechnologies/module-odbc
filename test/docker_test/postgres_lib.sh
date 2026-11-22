@@ -3,9 +3,10 @@
 # The functions that handle credentials do not trace them: they turn tracing off and restore the caller's state.
 # ci_source_env() is in ci_env.sh, which the job sources first.
 
-# The exit and signal handlers are armed only while the ownership state is known to be this job's own.
-# odbc_cleanup_install() sets this flag, so a value from the environment does not count.
-command unset -v odbc_cleanup_installed 2>/dev/null || :
+# The exit and signal handlers are armed only while the ownership state is known to be this job's own.  The limit of this
+# rule: the environment file runs as shell code with the administrator's credentials, so one that redefines these
+# functions is not defended against.  These flags are set by this job, so a value from the environment does not count.
+command unset -v odbc_cleanup_installed odbc_setup_started 2>/dev/null || :
 
 # pg_error_codes <output> [<text to print if the output has no code>]
 #
@@ -99,9 +100,9 @@ pg_valid_psql_args() {
     esac
 }
 
-# Clears the job's record of what it created.  If a value cannot be cleared, such as a read-only one, it cannot be
-# trusted: the exit and signal handlers are removed, so that nothing is dropped, and this fails.  "command" runs the builtins even if
-# a function shadows them, and keeps a read-only error from ending a POSIX shell.
+# Clears the job's record of what it created.  If a value cannot be cleared, such as a read-only one, it is not trusted:
+# the exit and signal handlers are removed, so that they drop nothing, and this fails.  "command" bypasses a function
+# named "unset" or "trap", unless "command" itself is redefined, and keeps a read-only error from ending a POSIX shell.
 pg_clear_ownership() {
     command unset -v odbc_owned_db odbc_owned_role 2>/dev/null || :
     if [ -n "${odbc_owned_db+x}" ] || [ -n "${odbc_owned_role+x}" ]; then
@@ -149,11 +150,31 @@ grant all on schema public to $1;
 EOF
 }
 
+# pg_write_env <file> <name>: writes the settings of the test database to the environment file; returns the first failure
+pg_write_env() {
+    ci_env_export "$1" QORE_DB_USER "$2" || return
+    ci_env_export "$1" QORE_DB_PASS "${PG_TEST_PASS}" || return
+    ci_env_export "$1" QORE_DB_NAME "$2" || return
+    ci_env_export "$1" QORE_DB_HOST "${RUNNER_HOST:=pgsql}" || return
+    systemdb="pgsql:$2/${PG_TEST_PASS}@$2%${RUNNER_HOST:=pgsql}"
+    ci_env_export "$1" QORE_DB_CONNSTR_PGSQL "${systemdb}" || return
+    ci_env_export "$1" QORE_DB_CONNSTR "${systemdb}" || return
+
+    # if we have a password for the local postgres user, then use it and connect to localhost as well
+    if [ -n "${POSTGRES_PASSWORD_MAP}" ]; then
+        pg_read_map_password || return
+        if [ -n "${PGPASSWORD}" ]; then
+            ci_env_export "$1" PGPASSWORD "${PGPASSWORD}" || return
+            ci_env_export "$1" PSQL_ARGS "-h ${RUNNER_HOST:=pgsql}" || return
+        fi
+    fi
+}
+
 setup_postgres_on_host() {
     { local pg_trace_flags=$-; set +x; } 2>/dev/null
     local pg_env="${ENV_FILE:-/tmp/env.sh}"
     local PG_TEST_PASS=qore
-    local user pg_create_status=0 pg_rearm=${odbc_cleanup_installed:-}
+    local user pg_setup_status=0
     # add env vars to environment file and load it
     if ! user=$(pg_new_test_name); then
         echo "ERROR: cannot generate the name of the test database" >&2
@@ -164,28 +185,33 @@ setup_postgres_on_host() {
             return 1
         } 2>/dev/null
     fi
-    ci_env_export "${pg_env}" QORE_DB_USER "${user}"
-    ci_env_export "${pg_env}" QORE_DB_PASS "${PG_TEST_PASS}"
-    ci_env_export "${pg_env}" QORE_DB_NAME "${user}"
-    ci_env_export "${pg_env}" QORE_DB_HOST "${RUNNER_HOST:=pgsql}"
-    systemdb="pgsql:${user}/${PG_TEST_PASS}@${user}%${RUNNER_HOST:=pgsql}"
-    ci_env_export "${pg_env}" QORE_DB_CONNSTR_PGSQL "${systemdb}"
-    ci_env_export "${pg_env}" QORE_DB_CONNSTR "${systemdb}"
-
-    # if we have a password for the local postgres user, then use it and connect to localhost as well
-    if [ -n "${POSTGRES_PASSWORD_MAP}" ]; then
-        pg_read_map_password
-        if [ -n "${PGPASSWORD}" ]; then
-            ci_env_export "${pg_env}" PGPASSWORD "${PGPASSWORD}"
-            ci_env_export "${pg_env}" PSQL_ARGS "-h ${RUNNER_HOST:=pgsql}"
-        fi
+    pg_write_env "${pg_env}" "${user}" || pg_setup_status=$?
+    if [ "${pg_setup_status}" != 0 ]; then
+        {
+            case $pg_trace_flags in
+                *x*) set -x ;;
+            esac
+            return "${pg_setup_status}"
+        } 2>/dev/null
     fi
 
-    # the environment file can set any variable: disarmed until the record is clear, as nothing is owned yet
-    if [ -n "${pg_rearm}" ]; then
+    # the environment file can set any variable: the flag is read-only first, and the handlers are disarmed until the
+    # record is clear, as nothing is owned yet
+    readonly odbc_cleanup_installed
+    if [ -n "${odbc_cleanup_installed:-}" ]; then
         command trap - EXIT INT TERM
     fi
+    # not in an AND-OR list, so that "set -e" stays in effect inside the file
     ci_source_env "${pg_env}"
+    pg_setup_status=$?
+    if [ "${pg_setup_status}" != 0 ]; then
+        {
+            case $pg_trace_flags in
+                *x*) set -x ;;
+            esac
+            return "${pg_setup_status}"
+        } 2>/dev/null
+    fi
 
     if ! pg_clear_ownership; then
         {
@@ -195,28 +221,29 @@ setup_postgres_on_host() {
             return 1
         } 2>/dev/null
     fi
-    if [ -n "${pg_rearm}" ]; then
+    if [ -n "${odbc_cleanup_installed:-}" ]; then
         odbc_cleanup_arm
     fi
-    pg_create_test_objects "${user}" || pg_create_status=$?
-    if [ "${pg_create_status}" != 0 ]; then
-        echo "ERROR: cannot create the test database and role (status ${pg_create_status})" >&2
+    pg_create_test_objects "${user}" || pg_setup_status=$?
+    if [ "${pg_setup_status}" != 0 ]; then
+        echo "ERROR: cannot create the test database and role (status ${pg_setup_status})" >&2
         {
             case $pg_trace_flags in
                 *x*) set -x ;;
             esac
-            return "${pg_create_status}"
+            return "${pg_setup_status}"
         } 2>/dev/null
     fi
     echo created pgsql user ${user} and db ${user}
 
     # make sure we can access the DB
-    pg_check_connection
+    pg_check_connection || pg_setup_status=$?
 
     {
         case $pg_trace_flags in
             *x*) set -x ;;
         esac
+        return "${pg_setup_status}"
     } 2>/dev/null
 }
 
@@ -224,6 +251,18 @@ setup_postgres_on_host() {
 setup_odbc_database() {
     { local odbc_trace_flags=$-; set +x; } 2>/dev/null
     local odbc_setup_status=0
+    # a second setup would clear the record of the first and leave its objects behind
+    if [ -n "${odbc_setup_started:-}" ]; then
+        echo "ERROR: the test database of this job is already set up" >&2
+        {
+            case $odbc_trace_flags in
+                *x*) set -x ;;
+            esac
+            return 1
+        } 2>/dev/null
+    fi
+    odbc_setup_started=1
+    readonly odbc_setup_started
     if getent hosts postgres > /dev/null 2>&1; then
         echo "Using postgres service from CI"
         export QORE_DB_USER=postgres
@@ -253,6 +292,8 @@ setup_odbc_database() {
         setup_postgres_on_host
         odbc_setup_status=$?
         if [ "${odbc_setup_status}" != 0 ]; then
+            # any partial record stays, so that the handlers drop what this job did create
+            readonly odbc_owned_db odbc_owned_role
             {
                 case $odbc_trace_flags in
                     *x*) set -x ;;
@@ -262,7 +303,7 @@ setup_odbc_database() {
         fi
         export QORE_DB_CONNSTR_ODBC="odbc:${QORE_DB_USER}/${QORE_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${QORE_DB_HOST};Database=${QORE_DB_NAME}}"
     fi
-    # a file that the job sources later cannot change what the exit handler drops
+    # read-only: an assignment in a file sourced later does not change what the exit handler drops
     readonly odbc_owned_db odbc_owned_role
     {
         case $odbc_trace_flags in
