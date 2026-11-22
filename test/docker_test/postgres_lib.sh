@@ -82,6 +82,39 @@ pg_valid_test_name() {
     esac
 }
 
+# pg_valid_psql_args: true only if PSQL_ARGS is empty or names a host, so that it cannot add a command, a file or an
+# option to the statements that create and drop the test objects
+pg_valid_psql_args() {
+    case "${PSQL_ARGS:-}" in
+        "") return 0 ;;
+        "-h "*) ;;
+        *) return 1 ;;
+    esac
+    case "${PSQL_ARGS#-h }" in
+        ""|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.:_-]*) return 1 ;;
+    esac
+}
+
+# Clears the job's record of what it created.  If a value cannot be cleared, such as a read-only one, it cannot be
+# trusted: the exit handler is removed, so that nothing is dropped, and this fails.  "builtin" is used in bash because a
+# function can shadow "unset" there; sh has no "builtin", and "command" keeps a read-only error from ending the shell.
+pg_clear_ownership() {
+    if [ -n "${BASH_VERSION:-}" ]; then
+        builtin unset -v odbc_owned_db odbc_owned_role 2>/dev/null || :
+    else
+        command unset -v odbc_owned_db odbc_owned_role 2>/dev/null || :
+    fi
+    if [ -n "${odbc_owned_db+x}" ] || [ -n "${odbc_owned_role+x}" ]; then
+        if [ -n "${BASH_VERSION:-}" ]; then
+            builtin trap - EXIT
+        else
+            command trap - EXIT
+        fi
+        echo "ERROR: cannot clear the record of the test database and role; nothing will be dropped" >&2
+        return 1
+    fi
+}
+
 # Prints a new name for the test database and role; fails if it cannot generate one of the exact shape.
 # NOTE: must convert to lower case only, or the psql commands will fail
 pg_new_test_name() {
@@ -93,20 +126,26 @@ pg_new_test_name() {
 }
 
 # pg_create_test_objects <name>: creates the database, then the role, and records each only after its own create
-# succeeded, so that the exit handler can never drop an object that already existed.
+# succeeded, so that the exit handler does not drop an object that this job's create did not make.
 # VERBOSITY=sqlstate: an error is reported by its code, without the statement, which holds a password
 pg_create_test_objects() {
-    cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || return
+    # the name was read again after the environment file was sourced, and it goes into SQL run as the administrator
+    pg_valid_test_name "$1" || return 1
+    if ! pg_valid_psql_args; then
+        echo "ERROR: PSQL_ARGS may only name a host" >&2
+        return 1
+    fi
+    cat <<EOF | psql -X -Upostgres -d postgres ${PSQL_ARGS} -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || return
 create database $1 encoding = 'utf8';
 EOF
     odbc_owned_db=$1
     # CREATEROLE lets SqlUtil's PgsqlBoundedTransaction.qtest create (and drop) the role its row-security case needs
-    cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || return
+    cat <<EOF | psql -X -Upostgres -d postgres ${PSQL_ARGS} -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || return
 create user $1 password '${PG_TEST_PASS}' createrole;
 EOF
     odbc_owned_role=$1
     # not ON_ERROR_STOP: the vector extension is optional on a shared host
-    cat <<EOF | psql -Upostgres -d "$1" -v VERBOSITY=sqlstate ${PSQL_ARGS} || return
+    cat <<EOF | psql -X -Upostgres -d "$1" ${PSQL_ARGS} -v VERBOSITY=sqlstate || return
 create extension if not exists vector;
 grant create, connect, temp on database $1 to $1;
 grant select on all tables in schema pg_catalog to $1;
@@ -149,7 +188,14 @@ setup_postgres_on_host() {
     ci_source_env "${pg_env}"
 
     # nothing is owned yet, whatever the environment file held
-    unset odbc_owned_db odbc_owned_role
+    if ! pg_clear_ownership; then
+        {
+            case $pg_trace_flags in
+                *x*) set -x ;;
+            esac
+            return 1
+        } 2>/dev/null
+    fi
     pg_create_test_objects "${user}" || pg_create_status=$?
     if [ "${pg_create_status}" != 0 ]; then
         echo "ERROR: cannot create the test database and role (status ${pg_create_status})" >&2
@@ -213,13 +259,17 @@ setup_odbc_database() {
     } 2>/dev/null
 }
 
-# Drops only what this job created and recorded: the database first, then the role.  Each name is validated again, so
-# the administrator's objects and the names in QORE_DB_* can never be dropped.  Returns the first failure.
+# Drops only what this job recorded: the database first, then the role.  Each name must have the generated shape, so
+# a name such as the administrator's is refused; QORE_DB_* is not read.  Returns the first failure.
 cleanup_postgres_on_host() {
     local db_status=0 role_status=0
+    if ! pg_valid_psql_args; then
+        echo "ERROR: PSQL_ARGS may only name a host; not dropping the test database and role" >&2
+        return 1
+    fi
     if [ -n "${odbc_owned_db:-}" ]; then
         if pg_valid_test_name "${odbc_owned_db}"; then
-            cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || db_status=$?
+            cat <<EOF | psql -X -Upostgres -d postgres ${PSQL_ARGS} -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || db_status=$?
 drop database ${odbc_owned_db} with (force);
 EOF
             if [ "${db_status}" = 0 ]; then
@@ -232,7 +282,7 @@ EOF
     fi
     if [ -n "${odbc_owned_role:-}" ]; then
         if pg_valid_test_name "${odbc_owned_role}"; then
-            cat <<EOF | psql -Upostgres -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate ${PSQL_ARGS} || role_status=$?
+            cat <<EOF | psql -X -Upostgres -d postgres ${PSQL_ARGS} -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || role_status=$?
 drop owned by ${odbc_owned_role};
 drop role ${odbc_owned_role};
 EOF
@@ -250,10 +300,11 @@ EOF
     return "${role_status}"
 }
 
-# Clears the job's ownership state, which is never exported and so cannot be inherited, and then installs the exit
-# handler.  INT and TERM end the job through the handler; SIGKILL cannot be handled.
+# Clears the job's ownership state, including any value from the environment, and installs the exit handler; fails
+# without installing it if the state cannot be cleared.  The state is not exported.  INT and TERM end the job through
+# the handler; SIGKILL cannot be handled.
 odbc_cleanup_install() {
-    unset odbc_owned_db odbc_owned_role
+    pg_clear_ownership || return 1
     trap odbc_cleanup_on_exit EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -263,8 +314,9 @@ odbc_cleanup_install() {
 # and exits with the status of the job, or of the cleanup if the job passed.
 odbc_cleanup_on_exit() {
     local job_status=$? cleanup_status=0
-    trap - EXIT
+    # first, so that a signal cannot skip the cleanup or replace the status of the job
     trap '' INT TERM
+    trap - EXIT
     set +e
     cleanup_postgres_on_host
     cleanup_status=$?

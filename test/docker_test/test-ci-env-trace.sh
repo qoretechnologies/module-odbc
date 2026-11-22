@@ -126,6 +126,18 @@ case "$*" in
                         exit 98 ;;
                 esac ;;
         esac
+        # no startup file may change these statements, and PSQL_ARGS may not override the options after it
+        case " $* " in
+            *" -X "*) ;;
+            *)
+                : > "${STUB_DIR}/psql-unsafe"
+                exit 97 ;;
+        esac
+        case "$*" in
+            *ON_ERROR_STOP=1*"-h "*|*VERBOSITY=sqlstate*"-h "*)
+                : > "${STUB_DIR}/psql-unsafe"
+                exit 97 ;;
+        esac
         # a model of the server: an object is a file.  As in psql reading a script, a failed statement ends it with
         # status 3 under ON_ERROR_STOP; otherwise psql goes on to the next statement and exits with 0
         server="${STUB_DIR}/server"
@@ -234,6 +246,9 @@ check_output() {
     elif [ -e "$work/args-leak" ]; then
         echo "FAIL: $1: the value is on a command line"
         fail=1
+    elif [ -e "$work/psql-unsafe" ]; then
+        echo "FAIL: $1: psql ran with a startup file, or with options that its arguments can override"
+        fail=1
     elif [ -e "$work/verbosity-lost" ]; then
         echo "FAIL: $1: a statement with a password ran without VERBOSITY=sqlstate"
         fail=1
@@ -258,7 +273,7 @@ check_output() {
 check_setup() {
     local out rc
     : > "$work/setup-env.sh"
-    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe"
     printf '%s' "$5" > "$work/setup-expected"
     out=$(run_lib "$1" "${6:-}" "$5" "
         set -e
@@ -278,7 +293,7 @@ check_direct() {
     if [ "$5" = on ]; then
         start="set -x"
     fi
-    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe"
     out=$(run_lib "$1" "$3" "$sentinel" "
         $start
         $2
@@ -293,7 +308,7 @@ check_direct() {
 check_odbc() {
     local out rc
     : > "$work/setup-env.sh"
-    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe"
     out=$(STUB_GETENT="$2" run_lib "$1" "" "$sentinel" "
         set -e
         set -x
@@ -352,18 +367,20 @@ check_codes_guard() {
 
 # check_owned <shell> <name> <expected status, or "nonzero"> <objects left on the server> <job>: the exit handler drops
 # only what this job created and recorded, keeps the status of the job, and traces no credential.  OWNED_PRE lists the
-# objects that exist before the job, and OWNED_FAIL is the failure of the stub tools.
+# objects that exist before the job, OWNED_FAIL is the failure of the stub tools, and OWNED_PREAMBLE runs before the
+# handler is installed.
 check_owned() {
     local out rc expected=$3 left
     : > "$work/setup-env.sh"
-    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/after-failure"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe" "$work/after-failure"
     # shellcheck disable=SC2086
     reset_server ${OWNED_PRE:-}
     out=$(STUB_SERVER_SET=1 run_lib "$1" "${OWNED_FAIL:-}" "$sentinel" "
-        odbc_cleanup_install
         set -e
-        set -x
+        ${OWNED_PREAMBLE:-}
         echo job-started
+        odbc_cleanup_install
+        set -x
         $5
         ")
     rc=$?
@@ -443,6 +460,12 @@ for shell in bash sh; do
     OWNED_FAIL=name check_owned $shell "name generation fails" 1 "$admin" 'setup_odbc_database; touch after-failure'
     OWNED_FAIL=badname check_owned $shell "a generated name of the wrong shape" 1 "$admin" \
         'setup_odbc_database; touch after-failure'
+    if grep -q -F 'x;drop' "$work/setup-env.sh"; then
+        echo "FAIL: $shell: owned: a generated name of the wrong shape reached the environment file"
+        fail=1
+    else
+        echo "ok: $shell: owned: a generated name of the wrong shape is not in the environment file"
+    fi
     OWNED_FAIL=emptyname check_owned $shell "an empty generated name" 1 "$admin" \
         'setup_odbc_database; touch after-failure'
     OWNED_PRE="db-qore_test_zzzzzzzzzz role-qore_test_zzzzzzzzzz" STUB_PSQL_FAIL="create database" \
@@ -466,6 +489,30 @@ for shell in bash sh; do
         "db-postgres role-postgres role-$n" setup_odbc_database
     STUB_PSQL_FAIL="drop role" check_owned $shell "a failed job keeps its status over a failed drop" 7 \
         "db-postgres role-postgres role-$n" "$job"
+    z=qore_test_zzzzzzzzzz
+    OWNED_PRE="db-$z role-$z" check_owned $shell "a read-only name in the environment file fails closed" 1 \
+        "db-postgres db-$z role-postgres role-$z" \
+        "printf 'readonly odbc_owned_db=$z\n' > \"\$ENV_FILE\"; setup_odbc_database; touch after-failure"
+    OWNED_PRE="db-$z role-$z" OWNED_PREAMBLE="readonly odbc_owned_role=$z" \
+        check_owned $shell "a read-only name before the handler fails closed" 1 \
+        "db-postgres db-$z role-postgres role-$z" 'touch after-failure'
+    check_owned $shell "a name changed by the environment file is not used" 1 "$admin" \
+        'printf "user=postgres\n" > "$ENV_FILE"; setup_odbc_database; touch after-failure'
+    for args in "-c x" "-f /x" "-a" "-h db -c x" "-h -x" "-h db;x" "otherdb"; do
+        check_owned $shell "psql arguments '$args' are refused at the setup" 1 "$admin" \
+            "unset POSTGRES_PASSWORD_MAP; export PSQL_ARGS='$args'; setup_odbc_database; touch after-failure"
+        check_owned $shell "psql arguments '$args' are refused at the cleanup" 1 \
+            "db-postgres db-$n role-postgres role-$n" "setup_odbc_database; PSQL_ARGS='$args'"
+    done
+    if [ "$shell" = bash ]; then
+        # a POSIX shell refuses a function named after a special builtin
+        odbc_owned_db=$z odbc_owned_role=$z OWNED_PRE="db-$z role-$z" OWNED_PREAMBLE='unset() { :; }' \
+            check_owned $shell "a shadowed unset does not keep an inherited name" 7 \
+            "db-postgres db-$z role-postgres role-$z" '(exit 7); touch after-failure'
+        # the signal arrives between the two steps at the start of the handler
+        OWNED_PREAMBLE='trap() { if [ "$1" = - ]; then kill -TERM $$; fi; builtin trap "$@"; }' \
+            check_owned $shell "TERM at the start of the handler keeps the status and the cleanup" 7 "$admin" "$job"
+    fi
     check_owned $shell "TERM stops the job and cleans up" 143 "$admin" \
         'setup_odbc_database; kill -TERM $$; touch after-failure'
     STUB_PSQL_SIGNAL=1 check_owned $shell "TERM during the cleanup does not stop it" 0 "$admin" setup_odbc_database
