@@ -3,6 +3,10 @@
 # The functions that handle credentials do not trace them: they turn tracing off and restore the caller's state.
 # ci_source_env() is in ci_env.sh, which the job sources first.
 
+# The exit and signal handlers are armed only while the ownership state is known to be this job's own.
+# odbc_cleanup_install() sets this flag, so a value from the environment does not count.
+command unset -v odbc_cleanup_installed 2>/dev/null || :
+
 # pg_error_codes <output> [<text to print if the output has no code>]
 #
 # Prints the exception code of the output of a failed command, and nothing else of it: the description of an exception
@@ -96,12 +100,12 @@ pg_valid_psql_args() {
 }
 
 # Clears the job's record of what it created.  If a value cannot be cleared, such as a read-only one, it cannot be
-# trusted: the exit handler is removed, so that nothing is dropped, and this fails.  "command" runs the builtins even if
+# trusted: the exit and signal handlers are removed, so that nothing is dropped, and this fails.  "command" runs the builtins even if
 # a function shadows them, and keeps a read-only error from ending a POSIX shell.
 pg_clear_ownership() {
     command unset -v odbc_owned_db odbc_owned_role 2>/dev/null || :
     if [ -n "${odbc_owned_db+x}" ] || [ -n "${odbc_owned_role+x}" ]; then
-        command trap - EXIT
+        command trap - EXIT INT TERM
         echo "ERROR: cannot clear the record of the test database and role; nothing will be dropped" >&2
         return 1
     fi
@@ -149,7 +153,7 @@ setup_postgres_on_host() {
     { local pg_trace_flags=$-; set +x; } 2>/dev/null
     local pg_env="${ENV_FILE:-/tmp/env.sh}"
     local PG_TEST_PASS=qore
-    local user pg_create_status=0
+    local user pg_create_status=0 pg_rearm=${odbc_cleanup_installed:-}
     # add env vars to environment file and load it
     if ! user=$(pg_new_test_name); then
         echo "ERROR: cannot generate the name of the test database" >&2
@@ -177,9 +181,12 @@ setup_postgres_on_host() {
         fi
     fi
 
+    # the environment file can set any variable: disarmed until the record is clear, as nothing is owned yet
+    if [ -n "${pg_rearm}" ]; then
+        command trap - EXIT INT TERM
+    fi
     ci_source_env "${pg_env}"
 
-    # nothing is owned yet, whatever the environment file held
     if ! pg_clear_ownership; then
         {
             case $pg_trace_flags in
@@ -187,6 +194,9 @@ setup_postgres_on_host() {
             esac
             return 1
         } 2>/dev/null
+    fi
+    if [ -n "${pg_rearm}" ]; then
+        odbc_cleanup_arm
     fi
     pg_create_test_objects "${user}" || pg_create_status=$?
     if [ "${pg_create_status}" != 0 ]; then
@@ -213,6 +223,7 @@ setup_postgres_on_host() {
 # Sets up the test database of the job and QORE_DB_CONNSTR_ODBC, which holds its password, without tracing it
 setup_odbc_database() {
     { local odbc_trace_flags=$-; set +x; } 2>/dev/null
+    local odbc_setup_status=0
     if getent hosts postgres > /dev/null 2>&1; then
         echo "Using postgres service from CI"
         export QORE_DB_USER=postgres
@@ -240,6 +251,15 @@ setup_odbc_database() {
     else
         echo "Using shared postgres host"
         setup_postgres_on_host
+        odbc_setup_status=$?
+        if [ "${odbc_setup_status}" != 0 ]; then
+            {
+                case $odbc_trace_flags in
+                    *x*) set -x ;;
+                esac
+                return "${odbc_setup_status}"
+            } 2>/dev/null
+        fi
         export QORE_DB_CONNSTR_ODBC="odbc:${QORE_DB_USER}/${QORE_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${QORE_DB_HOST};Database=${QORE_DB_NAME}}"
     fi
     # a file that the job sources later cannot change what the exit handler drops
@@ -294,9 +314,14 @@ EOF
 # the handler; SIGKILL cannot be handled.
 odbc_cleanup_install() {
     pg_clear_ownership || return 1
-    trap odbc_cleanup_on_exit EXIT
-    trap 'odbc_cleanup_finish 130' INT
-    trap 'odbc_cleanup_finish 143' TERM
+    odbc_cleanup_installed=1
+    odbc_cleanup_arm
+}
+
+odbc_cleanup_arm() {
+    command trap odbc_cleanup_on_exit EXIT
+    command trap 'odbc_cleanup_finish 130' INT
+    command trap 'odbc_cleanup_finish 143' TERM
 }
 
 # The exit handler of the job.
@@ -310,8 +335,8 @@ odbc_cleanup_on_exit() {
 # failure, instead of its own.  SIGKILL cannot be handled.
 odbc_cleanup_finish() {
     local job_status=$1 cleanup_status=0
-    trap '' INT TERM
-    trap - EXIT
+    command trap '' INT TERM
+    command trap - EXIT
     set +e
     cleanup_postgres_on_host
     cleanup_status=$?

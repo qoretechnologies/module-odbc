@@ -177,6 +177,7 @@ case "$*" in
                         exit 2
                     fi ;;
                 "drop database "*)
+                    printf 'x\n' >> "${STUB_DIR}/drop-log"
                     if [ -n "${STUB_PSQL_SIGNAL:-}" ]; then
                         kill -TERM "$PPID"
                     fi
@@ -375,18 +376,19 @@ check_codes_guard() {
 # check_owned <shell> <name> <expected status, or "nonzero"> <objects left on the server> <job>: the exit handler drops
 # only what this job created and recorded, keeps the status of the job, and traces no credential.  OWNED_PRE lists the
 # objects that exist before the job, OWNED_FAIL is the failure of the stub tools, and OWNED_PREAMBLE runs before the
-# handler is installed.
+# handler is installed; OWNED_INSTALL replaces the installation of the handler.
 check_owned() {
     local out rc expected=$3 left
     : > "$work/setup-env.sh"
-    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe" "$work/after-failure"
+    rm -f "$work/executed" "$work/args-leak" "$work/verbosity-lost" "$work/psql-unsafe" "$work/after-failure" \
+        "$work/drop-log" "$work/caller-exit"
     # shellcheck disable=SC2086
     reset_server ${OWNED_PRE:-}
     out=$(STUB_SERVER_SET=1 run_lib "$1" "${OWNED_FAIL:-}" "$sentinel" "
         set -e
         ${OWNED_PREAMBLE:-}
         echo job-started
-        odbc_cleanup_install
+        ${OWNED_INSTALL-odbc_cleanup_install}
         set -x
         $5
         ")
@@ -525,11 +527,54 @@ for shell in bash sh; do
     PSQL_ARGS='-c x' check_owned $shell "odd psql arguments with nothing to drop, no setup" 0 "$admin" ':'
     if [ "$shell" = bash ]; then
         # the signal arrives in the handler, just before INT and TERM are ignored: the cleanup still runs
-        OWNED_PREAMBLE='trap() { if [ -z "${odbc_test_sent:-}" ] && [ -z "${1:-}" ]; then odbc_test_sent=1; kill -TERM $$; fi; builtin trap "$@"; }' \
+        OWNED_PREAMBLE='command() { if [ "${1:-}" = trap ] && [ -z "${2:-}" ] && [ -z "${odbc_test_sent:-}" ]; then odbc_test_sent=1; kill -TERM $$; fi; builtin command "$@"; }' \
             check_owned $shell "TERM before the signals are ignored does not skip the cleanup" 143 "$admin" "$job"
         # the signal arrives between the two steps at the start of the handler
-        OWNED_PREAMBLE='trap() { if [ "$1" = - ]; then kill -TERM $$; fi; builtin trap "$@"; }' \
+        OWNED_PREAMBLE='command() { if [ "${1:-}" = trap ] && [ "${2:-}" = - ] && [ "$#" = 3 ]; then kill -TERM $$; fi; builtin command "$@"; }' \
             check_owned $shell "TERM at the start of the handler keeps the status and the cleanup" 7 "$admin" "$job"
+    fi
+    # the handlers are armed only while the ownership state is known to be this job's own
+    other="db-postgres db-$z role-postgres role-$z"
+    for sig in TERM INT; do
+        OWNED_PRE="db-$z role-$z" check_owned $shell "$sig after a failed clear in the setup drops nothing" nonzero "$other" \
+            "printf 'readonly odbc_owned_db=$z\n' > \"\$ENV_FILE\"; if setup_odbc_database; then touch after-failure; fi; kill -$sig \$\$; exit 9"
+        OWNED_PRE="db-$z role-$z" check_owned $shell "$sig after a failed clear drops nothing" nonzero "$other" \
+            "readonly odbc_owned_db=$z; if pg_clear_ownership; then touch after-failure; fi; kill -$sig \$\$; exit 9"
+        OWNED_PRE="db-$z role-$z" check_owned $shell "$sig while the environment file is sourced drops nothing" nonzero \
+            "$other" "printf 'export odbc_owned_db=$z\nkill -$sig \$\$\n' > \"\$ENV_FILE\"; setup_odbc_database; exit 9"
+        check_owned $shell "$sig after the setup still cleans up" nonzero "$admin" \
+            "setup_odbc_database; kill -$sig \$\$; exit 9"
+    done
+    OWNED_PRE="db-$z role-$z" check_owned $shell "a failure in the environment file drops nothing" nonzero "$other" \
+        "printf 'export odbc_owned_db=$z\nfalse\n' > \"\$ENV_FILE\"; setup_odbc_database; touch after-failure"
+    OWNED_PRE="db-$z role-$z" check_owned $shell "a failed clear with no signal drops nothing" 9 "$other" \
+        "readonly odbc_owned_db=$z; if pg_clear_ownership; then touch after-failure; fi; exit 9"
+    OWNED_INSTALL=: check_owned $shell "a setup without the handler arms nothing" 0 \
+        "db-postgres db-$n role-postgres role-$n" setup_odbc_database
+    odbc_cleanup_installed=1 OWNED_INSTALL=: check_owned $shell "an inherited install flag arms nothing" 0 \
+        "db-postgres db-$n role-postgres role-$n" setup_odbc_database
+    OWNED_INSTALL='trap ": > caller-exit" EXIT' check_owned $shell "a setup without the handler keeps the caller's trap" 0 \
+        "db-postgres db-$n role-postgres role-$n" setup_odbc_database
+    if [ -e "$work/caller-exit" ]; then
+        echo "ok: $shell: owned: the caller's exit trap still runs"
+    else
+        echo "FAIL: $shell: owned: the setup removed the caller's exit trap"
+        fail=1
+    fi
+    if "$shell" -c 'trap() { :; }' 2>/dev/null; then
+        OWNED_PREAMBLE='trap() { :; }' check_owned $shell "a shadowed trap does not repeat the cleanup" 143 "$admin" \
+            'setup_odbc_database; kill -TERM $$; exit 9'
+        if [ "$(wc -l < "$work/drop-log")" -eq 1 ]; then
+            echo "ok: $shell: owned: the cleanup ran once"
+        else
+            echo "FAIL: $shell: owned: the cleanup did not run exactly once"
+            fail=1
+        fi
+        OWNED_PRE="db-$z role-$z" OWNED_PREAMBLE='trap() { :; }' check_owned $shell \
+            "a shadowed trap does not keep the handlers after a failed clear" nonzero "$other" \
+            "readonly odbc_owned_db=$z; if pg_clear_ownership; then touch after-failure; fi; kill -TERM \$\$; exit 9"
+        OWNED_PREAMBLE='trap() { :; }' STUB_PSQL_SIGNAL=1 check_owned $shell \
+            "a shadowed trap does not let TERM stop the cleanup" 0 "$admin" setup_odbc_database
     fi
     check_owned $shell "TERM stops the job and cleans up" 143 "$admin" \
         'setup_odbc_database; kill -TERM $$; touch after-failure'
