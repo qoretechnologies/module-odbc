@@ -5,41 +5,20 @@ set -x
 
 ENV_FILE=/tmp/env.sh
 
-. ${ENV_FILE}
+# the environment file holds credentials: see ci_env.sh
+. "$(dirname "${BASH_SOURCE[0]}")/ci_env.sh"
+# the helper keeps credentials out of the trace: a failure here fails the job before it is relied on
+"$(dirname "${BASH_SOURCE[0]}")/test-ci-env-trace.sh"
+
+ci_source_env "${ENV_FILE}"
 
 apt update && apt install odbc-postgresql valgrind -y
 
-# Check if we're running with postgres service in CI (k8s)
-if getent hosts postgres > /dev/null 2>&1; then
-    echo "Using postgres service from CI"
-    export QORE_DB_USER=postgres
-    export QORE_DB_PASS=qore
-    export QORE_DB_NAME=postgres
-    export QORE_DB_HOST=postgres
-    export QORE_DB_CONNSTR_ODBC="odbc:${QORE_DB_USER}/${QORE_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${QORE_DB_HOST};Database=${QORE_DB_NAME}}"
-
-    # Wait for PostgreSQL to be ready
-    printf "waiting on PostgreSQL server: "
-    waited=0
-    while true; do
-        if PGPASSWORD=${QORE_DB_PASS} psql -h ${QORE_DB_HOST} -U ${QORE_DB_USER} -d ${QORE_DB_NAME} -c "SELECT 1" > /dev/null 2>&1; then
-            echo "ready"
-            break
-        fi
-        if [ $waited -eq 30 ]; then
-            echo && echo "Waited too long for PostgreSQL to start; aborting build."
-            exit 1
-        fi
-        printf .
-        sleep 1
-        waited=$((waited+1))
-    done
-else
-    echo "Using shared postgres host"
-    . test/docker_test/postgres_lib.sh
-    setup_postgres_on_host
-    export QORE_DB_CONNSTR_ODBC="odbc:${QORE_DB_USER}/${QORE_DB_PASS}@(UTF8){conn=DRIVER=PostgreSQL Unicode;Server=${QORE_DB_HOST};Database=${QORE_DB_NAME}}"
-fi
+# the test database
+. "$(dirname "${BASH_SOURCE[0]}")/postgres_lib.sh"
+# a failed test should not leave what this job created on a shared host
+odbc_cleanup_install
+setup_odbc_database
 
 # setup MODULE_SRC_DIR env var
 cwd=`pwd`
@@ -50,12 +29,12 @@ if [ -z "${MODULE_SRC_DIR}" ]; then
         MODULE_SRC_DIR=$WORKDIR/module-odbc
     fi
 fi
-echo "export MODULE_SRC_DIR=${MODULE_SRC_DIR}" >> ${ENV_FILE}
+ci_env_export "${ENV_FILE}" MODULE_SRC_DIR "${MODULE_SRC_DIR}"
 
 echo "export QORE_UID=999" >> ${ENV_FILE}
 echo "export QORE_GID=999" >> ${ENV_FILE}
 
-. ${ENV_FILE}
+ci_source_env "${ENV_FILE}"
 
 export MAKE_JOBS=4
 
@@ -93,14 +72,18 @@ done
 ${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/build gosu qore:qore
 
 # Exercise native connection-option failures without a database.
-python3 test/native/run-connection-options.py "build/odbc-api-$(qore --latest-module-api).qmod"
+python3 -B -W error test/native/run-connection-options.py "build/odbc-api-$(qore --latest-module-api).qmod"
 RESULTS="$RESULTS $?"
 
-# Cleanup if using shared host
-if ! getent hosts postgres > /dev/null 2>&1; then
-    . test/docker_test/postgres_lib.sh
-    cleanup_postgres_on_host
-fi
+# The runners below mask credentials in what they print.
+python3 -B -W error test/native/test_redact.py
+RESULTS="$RESULTS $?"
+
+# Exercise injected binding failures and driver faults against the test database.
+python3 -B -W error test/native/run-bind-failure.py "build/odbc-api-$(qore --latest-module-api).qmod"
+RESULTS="$RESULTS $?"
+python3 -B -W error test/native/run-driver-faults.py "build/odbc-api-$(qore --latest-module-api).qmod"
+RESULTS="$RESULTS $?"
 
 # check the results
 for R in $RESULTS; do

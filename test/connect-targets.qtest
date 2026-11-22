@@ -25,6 +25,18 @@ const Allowed = "127.0.0.1";
 #! the destination that the sandbox denies (see connect-targets-child.q)
 const Denied = "10.255.255.2";
 
+#! the exception codes that a failed child can report: the rest of its output can hold the connection string
+const ChildErrorCodes = (
+    "ODBC-BIND-ERROR", "ODBC-BIND-PLACEHOLDERS-ERROR", "ODBC-COLUMNAR-DECIMAL-ERROR", "ODBC-COLUMN-METADATA-ERROR",
+    "ODBC-COMMIT-ERROR", "ODBC-CONNECTION-DEAD-ERROR", "ODBC-CONNECTION-ERROR", "ODBC-CONNECTION-HANDLE-ERROR",
+    "ODBC-CONNECTION-OPTION-ERROR", "ODBC-DATA-ERROR", "ODBC-DISCONNECT-ERROR", "ODBC-ENV-HANDLE-ERROR",
+    "ODBC-EXEC-ERROR", "ODBC-FETCH-ERROR", "ODBC-FETCH-ROW-ERROR", "ODBC-MEMORY-ERROR",
+    "ODBC-MULTIPLE-RESULT-SETS-ERROR", "ODBC-NO-CONNECTION-ERROR", "ODBC-OPTION-ERROR", "ODBC-PARSE-ERROR",
+    "ODBC-PREPARE-ERROR", "ODBC-ROLLBACK-ERROR", "ODBC-SELECT-ROW-ERROR", "ODBC-SELECT-ROWS-ERROR",
+    "ODBC-STATEMENT-ALLOC-ERROR", "ODBC-TRANSACTION-ERROR", "DATASOURCE-PARSE-ERROR", "PARSE-ERROR",
+    "PARSE-EXCEPTION", "LOAD-MODULE-ERROR", "NETWORK-ACCESS-DENIED",
+);
+
 #! the drivers of odbcinst.ini: none of their libraries exists
 const OdbcInst = "[PostgreSQL]
 Driver = /nonexistent/psqlodbcw.so
@@ -181,7 +193,7 @@ Servername = %s
             testSkip("QORE_DB_CONNSTR_ODBC is not set");
         }
         hash<auto> r = run(({"connstr": ENV.QORE_DB_CONNSTR_ODBC},), True)[0];
-        assertTrue(r.ok, "the sandboxed connection: " + make_json(r));
+        assertTrue(r.ok, "the sandboxed connection: " + make_json(r - "desc"));
     }
 
     #! runs the connections in a child process with the test's odbc.ini files (or the system's, with \a system);
@@ -190,36 +202,43 @@ Servername = %s
         string json_path = tmp.path + sprintf("/conns-%d.json", ++seq);
         writeFile(json_path, make_json(conns));
         string env = system ? "" : sprintf("ODBCSYSINI='%s' ODBCINI='%s' HOME='%s' ", sys_dir, user_ini, tmp.path);
-        string cmd = sprintf("%s%s %s/connect-targets-child.q \"$(cat %s)\" 2>&1", env, ENV.QORE_BINARY ?? "qore",
+        # the child reads the connections from the file: they can hold a password, so they are not on its command line
+        string cmd = sprintf("%s%s %s/connect-targets-child.q '%s' 2>&1", env, ENV.QORE_BINARY ?? "qore",
             get_script_dir(), json_path);
         int rc;
         string out = backquote(cmd, \rc);
         if (rc) {
-            throw "CHILD-ERROR", sprintf("the child process failed (%d): %s", rc, out);
+            *list<*string> code = regex_extract(out, "^(" + ChildErrorCodes.join("|") + "): ", RE_MultiLine);
+            throw "CHILD-ERROR", sprintf("the child process failed (%d): %s", rc, code[0] ?? "no exception code");
         }
         list<auto> lines = select out.split("\n"), $1;
-        return parse_json(lines.last());
+        try {
+            return parse_json(lines.last());
+        } catch (hash<ExceptionInfo> ex) {
+            # the output of the child can hold the connection string
+            throw "CHILD-ERROR", sprintf("the output of the child process cannot be parsed: %s", ex.err);
+        }
     }
 
     private assertAllowed(hash<auto> r, string label) {
         # the check allowed the connection: it failed after the check (the driver cannot be loaded), or connected
-        assertTrue(r.ok || (r.err && r.err != "NETWORK-ACCESS-DENIED"), label + ": " + make_json(r));
+        assertTrue(r.ok || (r.err && r.err != "NETWORK-ACCESS-DENIED"), label + ": " + make_json(r - "desc"));
     }
 
     private assertDenied(hash<auto> r, string label) {
-        assertEq("NETWORK-ACCESS-DENIED", r.err, label + ": " + make_json(r));
+        assertEq("NETWORK-ACCESS-DENIED", r.err, label + ": " + make_json(r - "desc"));
         assertEq(-1, (r.desc ?? "").find("cannot be checked"), label + ": denied by the policy, not refused: "
-            + make_json(r));
+            + make_json(r - "desc"));
     }
 
     private assertRefused(hash<auto> r, string reason, string label) {
-        assertEq("NETWORK-ACCESS-DENIED", r.err, label + ": " + make_json(r));
-        assertNeq(-1, (r.desc ?? "").find(reason), label + ": " + make_json(r));
+        assertEq("NETWORK-ACCESS-DENIED", r.err, label + ": " + make_json(r - "desc"));
+        assertNeq(-1, (r.desc ?? "").find(reason), label + ": " + make_json(r - "desc"));
     }
 
     private writeFile(string path, string data) {
         File f();
-        f.open2(path, O_CREAT | O_WRONLY | O_TRUNC);
+        f.open2(path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
         f.write(data);
     }
 }
