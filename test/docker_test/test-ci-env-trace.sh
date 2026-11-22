@@ -16,6 +16,8 @@ if [ -z "$work" ] || [ ! -d "$work" ]; then
 fi
 trap 'rm -rf "$work"' EXIT
 fail=0
+# the settings that select the server come only from the test cases
+unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS
 
 printf 'export CI_ENV_TEST_VALUE=%s\n' "$sentinel" > "$work/env.sh"
 printf '. "%s/ci_env.sh"\nci_source_env "%s/env.sh"\nexport CI_ENV_TEST_NESTED=1\n' "$here" "$work" > "$work/nested.sh"
@@ -185,8 +187,9 @@ case "$*" in
                     fi ;;
                 "drop database "*)
                     printf 'x\n' >> "${STUB_DIR}/drop-log"
-                    printf '%s|%s|%s|%s|%s|%s|%s\n' "${PGHOST:-}" "${PGHOSTADDR:-}" "${PGPORT:-}" "${PGSERVICE:-}" \
-                        "${PGSERVICEFILE:-}" "${PGSYSCONFDIR:-}" "$*" > "${STUB_DIR}/drop-target"
+                    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "${PGHOST-<unset>}" "${PGHOSTADDR-<unset>}" "${PGPORT-<unset>}" \
+                        "${PGSERVICE-<unset>}" "${PGSERVICEFILE-<unset>}" "${PGSYSCONFDIR-<unset>}" \
+                        "${PGTARGETSESSIONATTRS-<unset>}" "${PGLOADBALANCEHOSTS-<unset>}" "$*" > "${STUB_DIR}/drop-target"
                     if [ -n "${STUB_PSQL_SIGNAL:-}" ]; then
                         kill -TERM "${STUB_JOB_PID:-$PPID}"
                     fi
@@ -408,6 +411,10 @@ check_owned() {
         expected=$rc
     fi
     check_output "$1: owned: $2" "$rc" "$expected" job-started "$out"
+    if printf '%s\n' "$out" | grep -q -F -- '-h pgsql'; then
+        echo "FAIL: $1: owned: $2: the recorded host is in the trace"
+        fail=1
+    fi
     left=$(cd "$work/server" && ls | sort | tr '\n' ' ')
     if [ -e "$work/after-failure" ]; then
         echo "FAIL: $1: owned: $2: the job continued after a failure"
@@ -596,7 +603,7 @@ for shell in bash sh; do
     STUB_PSQL_FAIL=grant-sql check_owned $shell "a failed grant is returned" 9 "$admin" "$unchecked"
     STUB_PSQL_FAIL=extension check_owned $shell "the vector extension stays optional" 0 "$admin" setup_odbc_database
     # the cleanup connects where the setup connected, whatever the job changes later
-    pg_vars="PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR"
+    pg_vars="PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS"
     first= later=
     for var in $pg_vars; do
         first="$first $var=first"
@@ -605,7 +612,7 @@ for shell in bash sh; do
     check_owned $shell "the cleanup keeps the recorded connection" 0 "$admin" \
         "export$first; setup_odbc_database; export$later; PSQL_ARGS='-h later'"
     case "$(cat "$work/drop-target" 2>/dev/null)" in
-        "first|first|first|first|first|first|"*"-h pgsql "*)
+        "first|first|first|first|first|first|first|first|"*"-h pgsql "*)
             echo "ok: $shell: owned: the drop used the recorded connection" ;;
         *)
             echo "FAIL: $shell: owned: the drop did not use the recorded connection"
@@ -614,7 +621,7 @@ for shell in bash sh; do
     check_owned $shell "connection settings added later are not used" 0 "$admin" \
         "setup_odbc_database; export$later"
     case "$(cat "$work/drop-target" 2>/dev/null)" in
-        "||||||"*"-h pgsql "*)
+        "<unset>|<unset>|<unset>|<unset>|<unset>|<unset>|<unset>|<unset>|"*"-h pgsql "*)
             echo "ok: $shell: owned: settings added after the setup were ignored" ;;
         *)
             echo "FAIL: $shell: owned: settings added after the setup reached the drop"
@@ -622,9 +629,38 @@ for shell in bash sh; do
     esac
     check_owned $shell "the recorded target is read-only after the setup" 9 "$admin" \
         'setup_odbc_database; if (odbc_target_host=later) 2>/dev/null; then touch after-failure; fi; exit 9'
+    for var in $pg_vars; do
+        check_owned $shell "a read-only $var set later stops the drop" 1 "db-postgres db-$n role-postgres role-$n" \
+            "setup_odbc_database; export $var=later; readonly $var"
+        if [ -e "$work/drop-target" ]; then
+            echo "FAIL: $shell: owned: psql ran with a read-only $var"
+            fail=1
+        else
+            echo "ok: $shell: owned: psql did not run with a read-only $var"
+        fi
+    done
+    check_owned $shell "a setup without a recorded host" 0 "$admin" 'unset POSTGRES_PASSWORD_MAP; setup_odbc_database'
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        *" -h "*)
+            echo "FAIL: $shell: owned: a host was added to the drop"
+            fail=1 ;;
+        *" -X "*|*"-X "*)
+            echo "ok: $shell: owned: the drop without a host ignores startup files" ;;
+        *)
+            echo "FAIL: $shell: owned: the drop without a host did not run"
+            fail=1 ;;
+    esac
+    check_owned $shell "IFS does not split the recorded host" 0 "$admin" 'setup_odbc_database; IFS=g'
+    case "$(cat "$work/drop-target" 2>/dev/null)" in
+        *"-h pgsql "*)
+            echo "ok: $shell: owned: the host reached psql whole" ;;
+        *)
+            echo "FAIL: $shell: owned: IFS split the host"
+            fail=1 ;;
+    esac
     OWNED_PRE="db-$n role-$n" check_owned $shell "a recorded target that is not a host is refused" 1 \
         "db-postgres db-$n role-postgres role-$n" "odbc_owned_db=$n; odbc_owned_role=$n; odbc_target_args='-c x'"
-    for var in args host hostaddr port service servicefile sysconfdir; do
+    for var in args host hostaddr port service servicefile sysconfdir session_attrs load_balance; do
         OWNED_PRE="db-$z role-$z" check_owned $shell "a read-only target $var fails closed" 9 "$other" \
             "printf 'readonly odbc_target_$var=later\n' > \"\$ENV_FILE\"; if setup_odbc_database 2> clear.err; then touch after-failure; fi; exit 9"
         if grep -q 'cannot clear the record' "$work/clear.err"; then

@@ -87,15 +87,16 @@ pg_valid_test_name() {
     esac
 }
 
-# pg_valid_psql_args: true only if PSQL_ARGS is empty or names a host, so that it cannot add a command, a file or an
-# option to the statements that create and drop the test objects
-pg_valid_psql_args() {
-    case "${1:-}" in
+# pg_valid_target_args: true only if the recorded PSQL_ARGS is empty or names a host, so that it cannot add a command, a
+# file or an option to the statements that create and drop the test objects.  It takes no argument, and shells do not
+# trace the word of a "case", so the recorded host is not in the trace.
+pg_valid_target_args() {
+    case "${odbc_target_args:-}" in
         "") return 0 ;;
         "-h "*) ;;
         *) return 1 ;;
     esac
-    case "${1#-h }" in
+    case "${odbc_target_args#-h }" in
         ""|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.:_-]*) return 1 ;;
     esac
 }
@@ -105,9 +106,11 @@ pg_valid_psql_args() {
 # named "unset" or "trap", unless "command" itself is redefined, and keeps a read-only error from ending a POSIX shell.
 pg_clear_ownership() {
     command unset -v odbc_owned_db odbc_owned_role odbc_target_args odbc_target_host odbc_target_hostaddr \
-        odbc_target_port odbc_target_service odbc_target_servicefile odbc_target_sysconfdir 2>/dev/null || :
+        odbc_target_port odbc_target_service odbc_target_servicefile odbc_target_sysconfdir \
+        odbc_target_session_attrs odbc_target_load_balance 2>/dev/null || :
     if [ -n "${odbc_owned_db+x}${odbc_owned_role+x}${odbc_target_args+x}${odbc_target_host+x}${odbc_target_hostaddr+x}" ] \
-        || [ -n "${odbc_target_port+x}${odbc_target_service+x}${odbc_target_servicefile+x}${odbc_target_sysconfdir+x}" ]; then
+        || [ -n "${odbc_target_port+x}${odbc_target_service+x}${odbc_target_servicefile+x}${odbc_target_sysconfdir+x}" ] \
+        || [ -n "${odbc_target_session_attrs+x}${odbc_target_load_balance+x}" ]; then
         command trap - EXIT INT TERM
         echo "ERROR: cannot clear the record of the test database and role; nothing will be dropped" >&2
         return 1
@@ -125,7 +128,9 @@ pg_new_test_name() {
 }
 
 # Records where this job connects, so that the cleanup drops its objects on the server that it created them on, whatever
-# the job changes in PSQL_ARGS or the PG* variables later.
+# the job changes later in PSQL_ARGS or in the libpq variables that select the server: PGHOST, PGHOSTADDR, PGPORT,
+# PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR, PGTARGETSESSIONATTRS and PGLOADBALANCEHOSTS.  PGDATABASE and PGUSER are
+# overridden on the command line.  A service without PGSERVICEFILE is still looked up through HOME.
 pg_record_target() {
     odbc_target_args=${PSQL_ARGS:-}
     odbc_target_host=${PGHOST:-}
@@ -134,8 +139,10 @@ pg_record_target() {
     odbc_target_service=${PGSERVICE:-}
     odbc_target_servicefile=${PGSERVICEFILE:-}
     odbc_target_sysconfdir=${PGSYSCONFDIR:-}
+    odbc_target_session_attrs=${PGTARGETSESSIONATTRS:-}
+    odbc_target_load_balance=${PGLOADBALANCEHOSTS:-}
     readonly odbc_target_args odbc_target_host odbc_target_hostaddr odbc_target_port odbc_target_service \
-        odbc_target_servicefile odbc_target_sysconfdir
+        odbc_target_servicefile odbc_target_sysconfdir odbc_target_session_attrs odbc_target_load_balance
 }
 
 # pg_target_psql <database> <psql option>...: runs psql as the administrator on the recorded target, in a subshell, with
@@ -144,7 +151,13 @@ pg_target_psql() (
     { set +x; } 2>/dev/null
     pg_target_db=$1
     shift
-    command unset -v PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR
+    command unset -v PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS 2>/dev/null || :
+    # a read-only setting cannot be replaced, so psql would connect with it
+    if [ -n "${PGHOST+x}${PGHOSTADDR+x}${PGPORT+x}${PGSERVICE+x}${PGSERVICEFILE+x}${PGSYSCONFDIR+x}" ] \
+        || [ -n "${PGTARGETSESSIONATTRS+x}${PGLOADBALANCEHOSTS+x}" ]; then
+        echo "ERROR: a read-only PostgreSQL connection setting cannot be replaced; not connecting" >&2
+        exit 1
+    fi
     if [ -n "${odbc_target_host:-}" ]; then
         export PGHOST="${odbc_target_host}"
     fi
@@ -163,7 +176,17 @@ pg_target_psql() (
     if [ -n "${odbc_target_sysconfdir:-}" ]; then
         export PGSYSCONFDIR="${odbc_target_sysconfdir}"
     fi
-    exec psql -X -Upostgres -d "${pg_target_db}" ${odbc_target_args:-} "$@"
+    if [ -n "${odbc_target_session_attrs:-}" ]; then
+        export PGTARGETSESSIONATTRS="${odbc_target_session_attrs}"
+    fi
+    if [ -n "${odbc_target_load_balance:-}" ]; then
+        export PGLOADBALANCEHOSTS="${odbc_target_load_balance}"
+    fi
+    # the recorded arguments are empty or "-h <host>"; the host is passed as one word, whatever IFS is
+    if [ -n "${odbc_target_args:-}" ]; then
+        exec psql -X -Upostgres -d "${pg_target_db}" -h "${odbc_target_args#-h }" "$@"
+    fi
+    exec psql -X -Upostgres -d "${pg_target_db}" "$@"
 )
 
 # pg_create_test_objects <name>: creates the database, then the role, and records each only after its own create
@@ -172,7 +195,7 @@ pg_target_psql() (
 pg_create_test_objects() {
     # the name was read again after the environment file was sourced, and it goes into SQL run as the administrator
     pg_valid_test_name "$1" || return 1
-    if ! pg_valid_psql_args "${odbc_target_args:-}"; then
+    if ! pg_valid_target_args; then
         echo "ERROR: PSQL_ARGS may only name a host" >&2
         return 1
     fi
@@ -366,7 +389,7 @@ cleanup_postgres_on_host() {
     local db_status=0 role_status=0
     if [ -n "${odbc_owned_db:-}" ]; then
         # the recorded arguments matter only when there is something to drop
-        if pg_valid_psql_args "${odbc_target_args:-}" && pg_valid_test_name "${odbc_owned_db}"; then
+        if pg_valid_target_args && pg_valid_test_name "${odbc_owned_db}"; then
             cat <<EOF | pg_target_psql postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || db_status=$?
 drop database ${odbc_owned_db} with (force);
 EOF
@@ -379,7 +402,7 @@ EOF
         fi
     fi
     if [ -n "${odbc_owned_role:-}" ]; then
-        if pg_valid_psql_args "${odbc_target_args:-}" && pg_valid_test_name "${odbc_owned_role}"; then
+        if pg_valid_target_args && pg_valid_test_name "${odbc_owned_role}"; then
             cat <<EOF | pg_target_psql postgres -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate || role_status=$?
 drop owned by ${odbc_owned_role};
 drop role ${odbc_owned_role};
