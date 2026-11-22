@@ -88,8 +88,8 @@ pg_valid_test_name() {
 }
 
 # pg_valid_target_args: true only if the recorded PSQL_ARGS is empty or names a host, so that it cannot add a command, a
-# file or an option to the statements that create and drop the test objects.  It takes no argument, and shells do not
-# trace the word of a "case", so the recorded host is not in the trace.
+# file or an option to the statements that create and drop the test objects.  It takes no argument, and the shells do
+# not expand the word of a "case" in a trace (bash prints it unexpanded), so the recorded host is not in the trace.
 pg_valid_target_args() {
     case "${odbc_target_args:-}" in
         "") return 0 ;;
@@ -159,28 +159,28 @@ pg_target_psql() (
         exit 1
     fi
     if [ -n "${odbc_target_host:-}" ]; then
-        export PGHOST="${odbc_target_host}"
+        export PGHOST="${odbc_target_host}" || exit 1
     fi
     if [ -n "${odbc_target_hostaddr:-}" ]; then
-        export PGHOSTADDR="${odbc_target_hostaddr}"
+        export PGHOSTADDR="${odbc_target_hostaddr}" || exit 1
     fi
     if [ -n "${odbc_target_port:-}" ]; then
-        export PGPORT="${odbc_target_port}"
+        export PGPORT="${odbc_target_port}" || exit 1
     fi
     if [ -n "${odbc_target_service:-}" ]; then
-        export PGSERVICE="${odbc_target_service}"
+        export PGSERVICE="${odbc_target_service}" || exit 1
     fi
     if [ -n "${odbc_target_servicefile:-}" ]; then
-        export PGSERVICEFILE="${odbc_target_servicefile}"
+        export PGSERVICEFILE="${odbc_target_servicefile}" || exit 1
     fi
     if [ -n "${odbc_target_sysconfdir:-}" ]; then
-        export PGSYSCONFDIR="${odbc_target_sysconfdir}"
+        export PGSYSCONFDIR="${odbc_target_sysconfdir}" || exit 1
     fi
     if [ -n "${odbc_target_session_attrs:-}" ]; then
-        export PGTARGETSESSIONATTRS="${odbc_target_session_attrs}"
+        export PGTARGETSESSIONATTRS="${odbc_target_session_attrs}" || exit 1
     fi
     if [ -n "${odbc_target_load_balance:-}" ]; then
-        export PGLOADBALANCEHOSTS="${odbc_target_load_balance}"
+        export PGLOADBALANCEHOSTS="${odbc_target_load_balance}" || exit 1
     fi
     # the recorded arguments are empty or "-h <host>"; the host is passed as one word, whatever IFS is
     if [ -n "${odbc_target_args:-}" ]; then
@@ -351,6 +351,7 @@ setup_odbc_database() {
             fi
             if [ $waited -eq 30 ]; then
                 echo && echo "Waited too long for PostgreSQL to start; aborting build."
+                # the one setup failure that ends the job instead of being returned: nothing is owned on this path
                 exit 1
             fi
             printf .

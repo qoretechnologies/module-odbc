@@ -17,7 +17,8 @@ fi
 trap 'rm -rf "$work"' EXIT
 fail=0
 # the settings that select the server come only from the test cases
-unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS
+unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS \
+    PSQL_ARGS
 
 printf 'export CI_ENV_TEST_VALUE=%s\n' "$sentinel" > "$work/env.sh"
 printf '. "%s/ci_env.sh"\nci_source_env "%s/env.sh"\nexport CI_ENV_TEST_NESTED=1\n' "$here" "$work" > "$work/nested.sh"
@@ -637,6 +638,16 @@ for shell in bash sh; do
             fail=1
         else
             echo "ok: $shell: owned: psql did not run with a read-only $var"
+        fi
+    done
+    for var in $pg_vars; do
+        check_owned $shell "a read-only $var without a value stops the drop" nonzero \
+            "db-postgres db-$n role-postgres role-$n" "export $var=first; setup_odbc_database; unset $var; readonly $var"
+        if [ -e "$work/drop-target" ]; then
+            echo "FAIL: $shell: owned: psql ran without the recorded $var"
+            fail=1
+        else
+            echo "ok: $shell: owned: psql did not run without the recorded $var"
         fi
     done
     check_owned $shell "a setup without a recorded host" 0 "$admin" 'unset POSTGRES_PASSWORD_MAP; setup_odbc_database'
