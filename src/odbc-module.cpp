@@ -474,26 +474,45 @@ static void odbc_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
     methods.add(QDBI_METHOD_GET_CONNECT_TARGETS, qore_odbc_targets::get_connect_targets);
 #endif
 
-    methods.registerOption(DBI_OPT_NUMBER_OPT, "when set, numeric/decimal values are returned as integers if "
+    // the options that are not sensitive are registered with option flags, so that their values can be shown where
+    // Qore shows the options of a datasource; an option registered without flags counts as undeclared, and its value
+    // is masked (qore#7070)
+    auto register_plain_option = [&methods](const char* name, const char* desc, const QoreTypeInfo* type = nullptr) {
+#ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
+        methods.registerOption(name, desc, type, 0);
+#else
+        methods.registerOption(name, desc, type);
+#endif
+    };
+
+    register_plain_option(DBI_OPT_NUMBER_OPT, "when set, numeric/decimal values are returned as integers if "
         "possible, otherwise as arbitrary-precision number values; the argument is ignored; setting this option "
         "turns it on and turns off 'string-numbers' and 'numeric-numbers'");
-    methods.registerOption(DBI_OPT_NUMBER_STRING, "when set, numeric/decimal values are returned as strings for "
+    register_plain_option(DBI_OPT_NUMBER_STRING, "when set, numeric/decimal values are returned as strings for "
         "backwards-compatibility; the argument is ignored; setting this option turns it on and turns off "
         "'optimal-numbers' and 'numeric-numbers'");
-    methods.registerOption(DBI_OPT_NUMBER_NUMERIC, "when set, numeric/decimal values are returned as "
+    register_plain_option(DBI_OPT_NUMBER_NUMERIC, "when set, numeric/decimal values are returned as "
         "arbitrary-precision number values; the argument is ignored; setting this option turns it on and turns off "
         "'string-numbers' and 'optimal-numbers'");
-    methods.registerOption(OPT_QORE_TIMEZONE, "set the server-side timezone, value must be a string in the format "
+    register_plain_option(OPT_QORE_TIMEZONE, "set the server-side timezone, value must be a string in the format "
         "accepted by Timezone::constructor() on the client (ie either a region name or a UTC offset like "
         "\"+01:00\"), if not set the server's time zone will be assumed to be the same as the client's",
         stringTypeInfo);
-    methods.registerOption(OPT_CONN, "set the ODBC connection string", stringTypeInfo);
-    methods.registerOption(OPT_BIGINT_NATIVE, "sets native bigint support");
-    methods.registerOption(OPT_BIGINT_STRING, "sets string bigint support");
-    methods.registerOption(OPT_FRAC_PRECISION, "sets fractional precision");
-    methods.registerOption(OPT_LOGIN_TIMEOUT, "sets the login timeout in seconds");
-    methods.registerOption(OPT_CONN_TIMEOUT, "sets the connection timeout in seconds");
-    methods.registerOption(OPT_PRESERVE_CASE, "if set, case is preserved in results");
+    // the connection string can hold the user name and password (UID and PWD) and other secrets, so its value is
+    // masked where Qore shows the options of a datasource (qore#7070)
+#ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
+    methods.registerOption(OPT_CONN, "set the ODBC connection string; it can hold credentials and is sensitive",
+        stringTypeInfo, QDBI_OPT_SENSITIVE);
+#else
+    methods.registerOption(OPT_CONN, "set the ODBC connection string; it can hold credentials and is sensitive",
+        stringTypeInfo);
+#endif
+    register_plain_option(OPT_BIGINT_NATIVE, "sets native bigint support");
+    register_plain_option(OPT_BIGINT_STRING, "sets string bigint support");
+    register_plain_option(OPT_FRAC_PRECISION, "sets fractional precision");
+    register_plain_option(OPT_LOGIN_TIMEOUT, "sets the login timeout in seconds");
+    register_plain_option(OPT_CONN_TIMEOUT, "sets the connection timeout in seconds");
+    register_plain_option(OPT_PRESERVE_CASE, "if set, case is preserved in results");
 
     DBID_ODBC = DBI.registerDriver("odbc", methods, DBI_ODBC_CAPS);
 }

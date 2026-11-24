@@ -1,0 +1,56 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+
+# Tests that the driver declares its "conn" option, whose connection string can hold credentials, sensitive, and that
+# Qore masks its value where it shows the options of a datasource (qore#7070).  No database is needed.
+
+%modern
+
+%requires QUnit
+
+# load the locally-built odbc binary module from the build directory
+%prepend-module-path "${SCRIPT_DIR}/../build"
+%requires odbc
+
+%exec-class SensitiveOptionsTest
+
+class SensitiveOptionsTest inherits QUnit::Test {
+    public {
+        const Secret = "PWD_SECRET_7070";
+    }
+
+    constructor() : QUnit::Test("odbc sensitive options", "1.0", \ARGV) {
+        addTestCase("option information", \optionInfo());
+        addTestCase("masked options", \maskedOptions());
+        set_return_value(main());
+    }
+
+    optionInfo() {
+%ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
+        hash<auto> h = dbi_get_driver_options("odbc");
+        assertTrue(h.conn.sensitive, "the connection string is sensitive");
+        foreach hash<auto> i in (h.pairIterator()) {
+            if (i.key != "conn") {
+                assertFalse(i.value.sensitive, i.key);
+            }
+        }
+%else
+        testSkip("the Qore library has no sensitive DBI options");
+%endif
+    }
+
+    maskedOptions() {
+%ifdef QORE_HAVE_DBI_SENSITIVE_OPTIONS
+        # a value that is shown is given as a string; "connection-timeout" is registered as not sensitive, but its
+        # name has "conn", which can name a connection string, so Qore's name rule masks its value
+        assertEq({"conn": "****", "login-timeout": "5", "connection-timeout": "****"},
+            mask_datasource_options("odbc", {"conn": "DSN=x;UID=u;PWD=" + Secret, "login-timeout": 5,
+                "connection-timeout": 5}));
+        assertFalse(dbi_get_driver_options("odbc"){"connection-timeout"}.sensitive);
+%else
+        testSkip("the Qore library has no sensitive DBI options");
+%endif
+    }
+}
