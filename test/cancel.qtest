@@ -149,7 +149,7 @@ sub run(Queue q, string connstr, string lock_sql, string sql, bool stmt) {
             q.push({'value': ds.select(sql)});
         }
     } catch (hash<ExceptionInfo> ex) {
-        q.push({'err': ex.err, 'desc': ex.desc});
+        q.push({'err': ex.err});
     }
 }
 ", "cancel");

@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from ci_redact import redact, redacted_repr
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -29,15 +31,16 @@ def main():
         env = dict(os.environ, LD_PRELOAD=str(library))
         result = subprocess.run(["qore", "-b", "--enable-debug", "-l", str(module),
                                  str(root / "bind-failure.qtest"), "-v"],
-                                env=env, capture_output=True, text=True, timeout=60)
-        print(result.stdout, end="")
-        print(result.stderr, end="")
+                                env=env, capture_output=True, text=True, errors="replace", timeout=60)
+        print(redact(result.stdout), end="")
+        print(redact(result.stderr), end="")
         result.check_returncode()
         trace = [line for line in result.stderr.splitlines() if line.startswith("ODBC_BIND_TRACE ")]
         expected = ["ODBC_BIND_TRACE injected column 1", "ODBC_BIND_TRACE bind column 1",
                     "ODBC_BIND_TRACE bind column 2"]
         if trace != expected:
-            raise AssertionError("Binding continued after the first failed NULL parameter: " + repr(trace))
+            raise AssertionError("Binding continued after the first failed NULL parameter: "
+                                 + redacted_repr(trace))
         print("Binding stops at the injected error and a fresh execution recovers")
 
 

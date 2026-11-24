@@ -87,8 +87,8 @@ class ErrorMessagesTest inherits QUnit::Test {
         }
         assertEq("ODBC-EXEC-ERROR", ex.err);
         # once in the SQL text and once in the server's message about the missing object
-        assertEq(2, occurrences(ex.desc, Name), ex.desc);
-        assertNeq(-1, ex.desc.find(sql), ex.desc);
+        assertEq(2, occurrences(ex.desc, Name), "the name is in the SQL and in the server's message");
+        assertNeq(-1, ex.desc.find(sql), "the SQL is in the message");
     }
 
     connectionError() {
@@ -110,6 +110,6 @@ class ErrorMessagesTest inherits QUnit::Test {
         }
         assertEq("ODBC-CONNECTION-ERROR", ex.err);
         # in the driver's message
-        assertGe(1, occurrences(ex.desc, PortName), ex.desc);
+        assertGe(1, occurrences(ex.desc, PortName), "the driver's message shows the value");
     }
 }
